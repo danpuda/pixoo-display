@@ -160,12 +160,29 @@ def is_session_completed(filepath: Path) -> bool:
                         continue
                 if isinstance(msg, dict) and msg.get("role") == "assistant":
                     stop = msg.get("stopReason", "")
-                    # stop/error/cancelled = completed; toolUse = still running
+                    # stop/error/cancelled = completed
                     if stop in ("stop", "error", "cancelled"):
                         return True
                     elif stop == "toolUse":
+                        # toolUse = likely still running, BUT check file age
+                        # If file hasn't been modified in 10+ min, it's stuck/done
+                        try:
+                            import time
+                            file_age = time.time() - filepath.stat().st_mtime
+                            if file_age > 600:  # 10 min stale threshold
+                                return True
+                        except OSError:
+                            pass
                         return False
                     # No stopReason = might still be streaming
+                    # Also check file age for safety
+                    try:
+                        import time
+                        file_age = time.time() - filepath.stat().st_mtime
+                        if file_age > 600:
+                            return True
+                    except OSError:
+                        pass
                     return False
             # If we read the full file and found nothing, stop
             if read_bytes >= fsize:
@@ -418,23 +435,16 @@ def find_active_subagents() -> list[dict]:
         if f.stat().st_size < 1000:
             continue
         
-        # Check completion BEFORE age filtering — a running session (toolUse)
-        # should stay visible even if the file hasn't been updated in a while
-        # (long exec commands like ML training don't write to JSONL until done)
+        # Check completion
         completed = is_session_completed(f)
         if completed:
             continue
         
-        # For non-completed sessions: use relaxed age cap
-        # (they're still actively running tools — file just hasn't been written to)
-        # For the "stale but not completed" edge case, MAX_AGE_SEC still applies
-        # to sessions within ACTIVE_WINDOW_SEC (recently touched)
+        # Stale detection: if file hasn't been modified in MAX_AGE_SEC,
+        # the session is almost certainly done — OpenClaw just didn't write
+        # a clean stopReason. Drop it to prevent zombie display.
         if age > MAX_AGE_SEC:
-            # Session is old AND not completed — it might be stuck or truly running
-            # Check if it's still genuinely running (stopReason=toolUse means active)
-            # is_session_completed already returned False, so it's either toolUse
-            # or has no stopReason. Either way, keep it visible up to the running cap.
-            pass  # Allow through — MAX_AGE_RUNNING_SEC (4h) is the hard limit above
+            continue
 
         # --- Character detection (priority order) ---
         # 1. Label from sessions.json (most reliable — set by OpenClaw at spawn time)

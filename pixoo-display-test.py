@@ -76,6 +76,23 @@ SLEEP_TICKER = "ロブ就寝中...zzZ"
 TODO_FILE = Path("/mnt/c/Users/danpu/OneDrive/Desktop/obsidianVault/openclaw/memory/tasks/todo-priority.md")
 TODO_POLL_SEC = 60  # re-read todo file every 60s
 
+# Git repos to scan for latest commits (ticker display)
+GIT_REPOS = [
+    Path("/mnt/c/Users/danpu/OneDrive/Desktop/obsidianVault/openclaw"),
+    Path("/mnt/c/Users/danpu/OneDrive/Desktop/fx-backtest-system"),
+    Path("/mnt/c/Users/danpu/OneDrive/Desktop/pixoo-display"),
+    Path("/home/yama/lobster-desktop-widget"),
+    Path("/home/yama/pico-pedal-bridge"),
+    Path("/home/yama/smart-home-dashboard"),
+    Path("/home/yama/kyousei-kun"),
+    Path("/home/yama/typeless-text-relay"),
+    Path("/home/yama/switchbot-home-integration"),
+    Path("/home/yama/nest-home-proxy"),
+    Path("/home/yama/tuya-home-proxy"),
+    Path("/home/yama/pixoo-notify-proxy"),
+]
+GIT_POLL_SEC = 30  # re-scan git repos every 30s
+
 CHARACTER_FRAMES = {
     "opus":       [f"/tmp/lob64-opus-frame{i}.png" for i in range(1, 5)],
     "sonnet":     [f"/tmp/lob64-sonnet-frame{i}.png" for i in range(1, 5)],
@@ -247,6 +264,65 @@ def get_top_priority_task() -> str:
         return FALLBACK_TICKER
 
 
+def get_latest_git_commits() -> str:
+    """Scan all repos and return the most recent commit as ticker text.
+
+    Returns a string like: "🔧 [openclaw] 3a57c3a 記憶弱化修正 (2m ago)"
+    Scans all GIT_REPOS sorted by commit time, picks the freshest.
+    """
+    import subprocess
+    now = time.time()
+    best = None  # (timestamp, repo_name, hash, message)
+
+    for repo in GIT_REPOS:
+        if not (repo / ".git").exists():
+            continue
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo), "log", "-1",
+                 "--format=%ct\t%h\t%s"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                continue
+            line = result.stdout.strip()
+            if not line:
+                continue
+            parts = line.split("\t", 2)
+            if len(parts) < 3:
+                continue
+            ts = int(parts[0])
+            commit_hash = parts[1]
+            message = parts[2]
+            repo_name = repo.name
+            if best is None or ts > best[0]:
+                best = (ts, repo_name, commit_hash, message)
+        except Exception:
+            continue
+
+    if not best:
+        return FALLBACK_TICKER
+
+    ts, repo_name, commit_hash, message = best
+    age = now - ts
+
+    # Human-readable age
+    if age < 60:
+        age_str = f"{int(age)}s"
+    elif age < 3600:
+        age_str = f"{int(age // 60)}m"
+    elif age < 86400:
+        age_str = f"{int(age // 3600)}h"
+    else:
+        age_str = f"{int(age // 86400)}d"
+
+    # Truncate long messages for readability on 64px display
+    if len(message) > 60:
+        message = message[:57] + "..."
+
+    return f"🔧 [{repo_name}] {commit_hash} {message} ({age_str}前)"
+
+
 class ScrollTextCache:
     """Pre-render scroll text as a horizontal strip to avoid Pilmoji per-frame."""
 
@@ -386,8 +462,8 @@ def run(duration_sec: float | None = None) -> None:
                 char_frame_cache[name] = loaded
                 print(f"[i] Loaded: {name}")
 
-    # Scroll text state
-    default_ticker = get_top_priority_task()
+    # Scroll text state — Git commit ticker (primary), todo fallback
+    default_ticker = get_latest_git_commits()
     current_ticker = default_ticker
     _scroll_cache.get_strip(current_ticker, scroll_font)
     current_ticker_w = _scroll_cache.width
@@ -445,12 +521,24 @@ def run(duration_sec: float | None = None) -> None:
                     new_display_list = [{"char": "opus", "started": None, "is_main": True}]
 
                 if new_count != agent_count:
-                    print(f"[i] Subagents: {new_count}")
+                    old_count = agent_count
+                    new_chars = [d["char"] for d in new_display_list]
+                    print(f"[i] Subagents: {new_count} chars={new_chars} display_idx={display_idx}")
+                    # Reset swap timer on 0→N transition to prevent immediate swap
+                    if old_count == 0 and new_count > 0:
+                        last_char_swap_t = now
+                        print(f"[rot] reset-timer: agents 0→{new_count}, swap timer reset")
+                    # All agents gone
+                    if old_count > 0 and new_count == 0:
+                        print(f"[rot] reset: agents gone, fallback to idx 0 (opus)")
+                    # Single agent: log only on 0→1 transition (P1-C fix)
+                    if new_count == 1 and old_count == 0:
+                        print(f"[rot] single-agent: {new_chars[0]} (no rotation needed)")
                     agent_count = new_count
 
-                # Re-read todo priority periodically
-                if now - last_todo_check_t >= TODO_POLL_SEC:
-                    default_ticker = get_top_priority_task()
+                # Re-scan git repos periodically for latest commit
+                if now - last_todo_check_t >= GIT_POLL_SEC:
+                    default_ticker = get_latest_git_commits()
                     last_todo_check_t = now
 
                 # Update scroll text dynamically
@@ -484,9 +572,12 @@ def run(duration_sec: float | None = None) -> None:
 
                 # Preserve current character across list rebuilds to prevent
                 # mid-rotation jumps (fixes Grok early-disappear bug).
+                old_chars = [d["char"] for d in display_list]
                 old_char = current_display_char
-                old_is_main = display_idx == 0
+                old_is_main = display_list[display_idx]["is_main"] if display_list and display_idx < len(display_list) else True
+                old_display_idx = display_idx
                 display_list = new_display_list
+                new_chars_rebuild = [d["char"] for d in display_list]
 
                 if old_char and display_list:
                     found_idx = None
@@ -503,9 +594,14 @@ def run(duration_sec: float | None = None) -> None:
                                 break
                     if found_idx is not None:
                         display_idx = found_idx
+                        current_display_char = display_list[display_idx]["char"]  # P1-A fix: sync char name
+                        if old_chars != new_chars_rebuild:
+                            print(f"[rot] list-rebuild: {old_chars} → {new_chars_rebuild} (preserved: {old_char}@{display_idx})")
                     else:
-                        display_idx = 0
-                        current_display_char = display_list[0]["char"] if display_list else "opus"
+                        # Character gone: clamp to nearest valid position instead of resetting to 0
+                        display_idx = min(old_display_idx, len(display_list) - 1) if display_list else 0
+                        current_display_char = display_list[display_idx]["char"] if display_list else "opus"
+                        print(f"[rot] list-rebuild: {old_chars} → {new_chars_rebuild} (gone: {old_char}, fallback idx {display_idx} → {current_display_char})")
                 elif display_idx >= len(display_list):
                     display_idx = 0
                 last_state_check_t = now
@@ -515,13 +611,18 @@ def run(duration_sec: float | None = None) -> None:
                 current_display_char = "opus"
 
             if agent_count > 0 and now - last_char_swap_t >= CHARACTER_SWAP_SEC:
-                display_idx = (display_idx + 1) % len(display_list)
-                anim_frame_idx = 0
-                last_char_swap_t = now
-                cur = display_list[display_idx]
-                current_display_char = cur["char"]
-                label = "Rob" if cur["is_main"] else cur["char"]
-                print(f"[i] -> {label}")
+                if len(display_list) <= 1:
+                    # Single agent: just reset timer, no rotation
+                    last_char_swap_t = now
+                else:
+                    old_idx = display_idx
+                    old_char_name = display_list[old_idx]["char"] if old_idx < len(display_list) else "?"
+                    display_idx = (display_idx + 1) % len(display_list)
+                    anim_frame_idx = 0
+                    last_char_swap_t = now
+                    cur = display_list[display_idx]
+                    current_display_char = cur["char"]
+                    print(f"[rot] swap: {old_char_name} → {current_display_char} (idx {old_idx}→{display_idx}/{len(display_list)}, interval={CHARACTER_SWAP_SEC}s)")
 
             updated = False
 

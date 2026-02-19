@@ -21,7 +21,8 @@ STATE_FILE = Path("/tmp/pixoo-agents.json")
 POLL_SEC = 3.0
 # Sessions modified within this window are considered "active"
 ACTIVE_WINDOW_SEC = 300  # 5 minutes (relaxed from 2 min for long-running tasks)
-MAX_AGE_SEC = 1800       # 30 minutes absolute cap — always skip beyond this
+MAX_AGE_SEC = 1800       # 30 minutes — age cap for completed/stale sessions
+MAX_AGE_RUNNING_SEC = 14400  # 4 hours — extended cap for sessions still running tools
 AGENT_TTL_SEC = 600      # 10 minutes — manual entries expire after this
 
 # Model → Character mapping
@@ -327,7 +328,8 @@ def _load_session_store() -> dict:
             session_id = val.get("sessionId", "")
             if not session_id:
                 continue
-            model = val.get("model", "") or ""
+            # OpenClaw stores model in 'model' or 'modelOverride' depending on version
+            model = val.get("model", "") or val.get("modelOverride", "") or ""
             label = val.get("label", "") or ""
 
             # Derive label from key slug when not set explicitly
@@ -400,11 +402,8 @@ def find_active_subagents() -> list[dict]:
         mtime = f.stat().st_mtime
         age = now - mtime
 
-        # Absolute cap: always skip sessions older than MAX_AGE_SEC (30 min)
-        if age > MAX_AGE_SEC:
-            continue
-
-        if age > ACTIVE_WINDOW_SEC:
+        # Quick skip: extremely old files (beyond even running cap)
+        if age > MAX_AGE_RUNNING_SEC:
             continue
         
         # Skip main session (by authoritative ID from sessions.json)
@@ -419,9 +418,23 @@ def find_active_subagents() -> list[dict]:
         if f.stat().st_size < 1000:
             continue
         
-        # Skip completed sessions (stopReason=stop/error/cancelled)
-        if is_session_completed(f):
+        # Check completion BEFORE age filtering — a running session (toolUse)
+        # should stay visible even if the file hasn't been updated in a while
+        # (long exec commands like ML training don't write to JSONL until done)
+        completed = is_session_completed(f)
+        if completed:
             continue
+        
+        # For non-completed sessions: use relaxed age cap
+        # (they're still actively running tools — file just hasn't been written to)
+        # For the "stale but not completed" edge case, MAX_AGE_SEC still applies
+        # to sessions within ACTIVE_WINDOW_SEC (recently touched)
+        if age > MAX_AGE_SEC:
+            # Session is old AND not completed — it might be stuck or truly running
+            # Check if it's still genuinely running (stopReason=toolUse means active)
+            # is_session_completed already returned False, so it's either toolUse
+            # or has no stopReason. Either way, keep it visible up to the running cap.
+            pass  # Allow through — MAX_AGE_RUNNING_SEC (4h) is the hard limit above
 
         # --- Character detection (priority order) ---
         # 1. Label from sessions.json (most reliable — set by OpenClaw at spawn time)

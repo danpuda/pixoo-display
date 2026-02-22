@@ -20,7 +20,7 @@ SESSIONS_JSON_STORE = Path("/home/yama/.openclaw/agents/main/sessions/sessions.j
 STATE_FILE = Path("/tmp/pixoo-agents.json")
 POLL_SEC = 3.0
 # Sessions modified within this window are considered "active"
-ACTIVE_WINDOW_SEC = 300  # 5 minutes (relaxed from 2 min for long-running tasks)
+ACTIVE_WINDOW_SEC = 900  # 15 minutes — ロブ🦞がthinking中でも生きてる判定にする（5分だと誤判定多発）
 MAX_AGE_SEC = 1800       # 30 minutes — age cap for completed/stale sessions
 MAX_AGE_RUNNING_SEC = 14400  # 4 hours — extended cap for sessions still running tools
 AGENT_TTL_SEC = 600      # 10 minutes — manual entries expire after this

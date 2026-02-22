@@ -1,6 +1,6 @@
 #!/bin/bash
 # Auto-restart wrapper for pixoo-display-test.py v6
-SCRIPT="/home/yama/pixoo-display-test.py"
+SCRIPT="/home/yama/pixoo-display/pixoo-display-test.py"
 LOG="/tmp/pixoo-display-v6.log"
 
 while true; do

@@ -65,7 +65,7 @@ TEXT_STEP_PX = 1
 CHARACTER_SWAP_SEC = 5.0
 STATE_FILE = Path("/tmp/pixoo-agents.json")
 STATE_POLL_SEC = 1.0
-SLEEP_AFTER_SEC = 600  # 10 minutes idle
+SLEEP_AFTER_SEC = 1200  # 20 minutes idle — 10分だとロブ🦞が思考中に寝てしまう問題の修正
 AGENT_TTL_SEC = 600    # auto-expire agents after 10 minutes (safety net)
 
 SCROLL_FONT_SIZE = 10

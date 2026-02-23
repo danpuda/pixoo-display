@@ -549,11 +549,12 @@ def sync_state(agents: list[dict], main_active: bool = False) -> bool:
     except:
         pass
     
-    # Preserve manual entries (added via pixoo-agent-ctl.py) that haven't expired
+    # Preserve manual entries (added via pixoo-agent-ctl.py) and ide-watcher entries that haven't expired
     auto_ids = {a["id"] for a in new_agents}
     for existing in current.get("agents", []):
-        if existing.get("source") == "manual" and existing.get("id") not in auto_ids:
-            # Keep manual entries alive if within TTL (10 min from last_seen)
+        source = existing.get("source", "")
+        if source in ("manual", "ide-watcher") and existing.get("id") not in auto_ids:
+            # Keep manual/ide-watcher entries alive if within TTL (10 min from last_seen)
             last_seen = existing.get("last_seen", existing.get("started", 0))
             if now - last_seen < AGENT_TTL_SEC:
                 new_agents.append(existing)

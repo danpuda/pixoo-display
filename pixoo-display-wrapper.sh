@@ -3,6 +3,9 @@
 SCRIPT="/home/yama/pixoo-display/pixoo-display-test.py"
 LOG="/tmp/pixoo-display-v6.log"
 
+# Ensure sprites exist in /tmp before starting
+bash /home/yama/pixoo-display/ensure-sprites.sh >> "$LOG" 2>&1
+
 while true; do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting pixoo-display-test.py" >> "$LOG"
     python3 -u "$SCRIPT" 2>&1 | tee -a "$LOG"

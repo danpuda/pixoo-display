@@ -142,7 +142,7 @@ def determine_status(
 
     # --- Output unchanged — check staleness ---
     last_change = last_change_times.get(window_name, now)
-    if now - last_change > WAITING_THRESHOLD_SEC:
+    if now - last_change >= WAITING_THRESHOLD_SEC:
         return "waiting"
 
     return "active"
@@ -153,9 +153,19 @@ def load_config() -> dict:
 
     Supports:
         {"pl_window": "ebay-ph4-lead"}  — force a specific window as PL
+
+    Security: skips the file if it is not owned by the current user,
+    preventing a local privilege escalation via /tmp symlink attacks.
     """
     try:
         if CONFIG_FILE.exists():
+            stat = os.stat(CONFIG_FILE)
+            if stat.st_uid != os.getuid():
+                print(
+                    f"[!] Skipping {CONFIG_FILE}: owned by uid={stat.st_uid},"
+                    f" expected uid={os.getuid()} — possible /tmp tampering"
+                )
+                return {}
             data = json.loads(CONFIG_FILE.read_text())
             if isinstance(data, dict):
                 return data
@@ -311,16 +321,17 @@ def build_agents(
 
         char = ROLE_TO_CHAR.get(role, "codex")
 
-        # Track first-seen time per window name
-        if name not in first_seen:
-            first_seen[name] = now
+        # Track first-seen time keyed by window_index (unique; avoids same-name collision)
+        idx_key = str(w["window_index"])
+        if idx_key not in first_seen:
+            first_seen[idx_key] = now
 
         agents.append({
             # --- 互換必須キー ---
-            "id": name,
+            "id": idx_key,            # window_index string — unique even for same-name windows
             "char": char,
             "task": name,
-            "started": first_seen[name],
+            "started": first_seen[idx_key],
             "last_seen": now,
             # --- 追加キー ---
             "role": role,
@@ -329,9 +340,9 @@ def build_agents(
             "window_index": w["window_index"],
         })
 
-    # Prune stale entries from first_seen
-    current_names = {w["window_name"] for w in windows}
-    for stale_key in [k for k in first_seen if k not in current_names]:
+    # Prune stale entries from first_seen (keyed by window_index string)
+    current_idx_keys = {str(w["window_index"]) for w in windows}
+    for stale_key in [k for k in first_seen if k not in current_idx_keys]:
         del first_seen[stale_key]
 
     return agents, main_active

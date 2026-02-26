@@ -169,6 +169,13 @@ class TestDetermineStatus:
         after_threshold = 100.0 + sync.WAITING_THRESHOLD_SEC + 1
         assert sync.determine_status("hello", "w0", outputs, times, after_threshold) == "waiting"
 
+    def test_same_output_becomes_waiting_at_exact_threshold(self):
+        """Boundary: exactly at WAITING_THRESHOLD_SEC should be waiting (>= not >)."""
+        outputs = {"w0": "hello"}
+        times = {"w0": 100.0}
+        exactly_threshold = 100.0 + sync.WAITING_THRESHOLD_SEC
+        assert sync.determine_status("hello", "w0", outputs, times, exactly_threshold) == "waiting"
+
     def test_output_change_resets_to_active(self):
         outputs = {"w0": "hello"}
         times = {"w0": 50.0}
@@ -272,7 +279,8 @@ class TestBuildAgents:
         assert not main_active
         assert len(agents) == 1
         assert agents[0]["role"] == "DEV"
-        assert agents[0]["id"] == "feature-impl"
+        assert agents[0]["id"] == "1"        # window_index-based id
+        assert agents[0]["task"] == "feature-impl"  # task keeps window_name
         assert agents[0]["char"] == "codex"
 
     def test_pl_selection_lowest_index(self):
@@ -285,7 +293,7 @@ class TestBuildAgents:
         pl_agents = [a for a in agents if a["role"] == "PL"]
         dev_agents = [a for a in agents if a["role"] == "DEV"]
         assert len(pl_agents) == 1
-        assert pl_agents[0]["id"] == "a-lead"
+        assert pl_agents[0]["id"] == "1"   # a-lead has window_index=1
         assert len(dev_agents) == 1  # other lead demoted to DEV
 
     def test_pl_selection_config_override(self):
@@ -298,7 +306,7 @@ class TestBuildAgents:
         agents, _ = sync.build_agents(windows, config, {})
         pl_agents = [a for a in agents if a["role"] == "PL"]
         assert len(pl_agents) == 1
-        assert pl_agents[0]["id"] == "b-lead"
+        assert pl_agents[0]["id"] == "3"   # b-lead has window_index=3
 
     def test_idle_workers_excluded(self):
         windows = [
@@ -317,11 +325,11 @@ class TestBuildAgents:
         assert required_keys.issubset(set(agents[0].keys()))
 
     def test_first_seen_tracking(self):
-        """first_seen dict should track window creation time."""
+        """first_seen dict should track window creation time (keyed by window_index)."""
         first_seen = {}
         windows = [{"window_index": 1, "window_name": "test-impl", "pane_pid": 200}]
         sync.build_agents(windows, {}, first_seen)
-        assert "test-impl" in first_seen
+        assert "1" in first_seen  # keyed by str(window_index)
 
     def test_first_seen_pruning(self):
         """Removed windows should be pruned from first_seen."""
@@ -344,6 +352,21 @@ class TestBuildAgents:
         roles = {a["role"] for a in agents}
         assert roles == {"PL", "QA", "DEV"}
         assert len(agents) == 3  # DIR not in list, worker-5 idle
+
+    def test_same_name_windows_get_unique_ids(self):
+        """Two windows with identical names must produce unique ids (window_index-based)."""
+        windows = [
+            {"window_index": 2, "window_name": "codex-impl", "pane_pid": 200},
+            {"window_index": 5, "window_name": "codex-impl", "pane_pid": 500},
+        ]
+        agents, _ = sync.build_agents(windows, {}, {})
+        assert len(agents) == 2
+        ids = [a["id"] for a in agents]
+        assert len(set(ids)) == 2, "same-name windows must not share an id"
+        assert "2" in ids
+        assert "5" in ids
+        # task (display name) is still the window_name
+        assert all(a["task"] == "codex-impl" for a in agents)
 
 
 # ── Window add/remove simulation ───────────────────────────────
@@ -370,14 +393,14 @@ class TestWindowDynamics:
             {"window_index": 2, "window_name": "b-impl", "pane_pid": 200},
         ]
         sync.build_agents(windows, {}, first_seen)
-        assert "a-impl" in first_seen
-        assert "b-impl" in first_seen
+        assert "1" in first_seen   # keyed by str(window_index)
+        assert "2" in first_seen
 
         # Remove window 1
         windows_after = [{"window_index": 2, "window_name": "b-impl", "pane_pid": 200}]
         agents, _ = sync.build_agents(windows_after, {}, first_seen)
         assert len(agents) == 1
-        assert "a-impl" not in first_seen
+        assert "1" not in first_seen  # pruned
 
     def test_tmux_restart_empty(self):
         """Simulating tmux restart: empty window list → no agents."""

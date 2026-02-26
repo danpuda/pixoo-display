@@ -1,0 +1,86 @@
+# CLAUDE.md — Pixoo tmux 表示化プロジェクト
+
+## プロジェクト概要
+Pixoo-64 LED の表示を「サブエージェント監視」→「tmux エージェントチーム可視化」に作り替える。
+
+## 設計書
+**必ず最初に読め**: `docs/DESIGN-tmux-display.md`
+
+## チーム構成
+- 🏗️ PL (あなた = Team Lead): タスク分解・DEV指示・一次チェック・Codexレビュー管理
+- ⚙️ DEV (Teammate): コーディング・テスト
+- 🦞 DIR (ロブ/Opus): チーム外。最終確認のみ
+
+## PL の責務（重要！）
+1. 設計書を読んでタスクを分解する
+2. DEV に具体的な実装指示を出す
+3. DEV の成果物を一次チェックする
+4. **Codex レビューを自動実行する**（下記参照）
+5. 全Phase完了後に DIR に報告する
+
+## ⚠️ Codex レビュー（QA — 必須！）
+各 Phase の実装が完了したら、以下を Bash で実行してレビューを受けろ：
+
+```bash
+codex exec --full-auto -C /home/yama/pixoo-display \
+  "## コードレビュー
+対象: [変更したファイル名]
+チェック: バグ・ロジックエラー・エッジケース・セキュリティ
+出力: 🔴致命的/🟡改善/🟢良い点 + スコアX/100
+日本語で。"
+```
+
+- 🔴致命的 が出たら **必ず修正してから次のPhaseに進め**
+- 🟡改善 は判断して対応（全部やらなくてOK）
+- 修正後は再レビュー（🔴が0になるまで）
+
+## 実装フェーズ
+
+### Phase 1: pixoo_tmux_sync.py 新規作成
+**スコープ**: tmux → JSON変換のみ。display側は触らない。
+- `tmux list-windows -t shared -F "#{window_index}\t#{window_name}\t#{pane_pid}"` でパース
+- window名 → 役割マッピング（設計書の判定ロジック参照）
+- `/tmp/pixoo-agents.json` に書き出し
+- 互換必須キー: `id`, `char`, `task`, `started`, `last_seen`, `main_active`
+- 追加キー: `role`, `status`（display側は無視する）
+- capture-pane は **しない**（Phase 3）
+- `pixoo-sync-wrapper.sh` を修正して新スクリプトを呼ぶ
+- **成功条件**: 既存 `pixoo-display-test.py` がそのまま動く
+
+### Phase 2: pixoo-display-test.py に上部アイコンバー追加
+**スコープ**: display側の改修。sync側は触らない。
+- 上部8px に 5x5ドットアイコン + タイマー
+- 色コードで役割識別（設計書の色テーブル参照）
+- active/waiting の色分け
+
+### Phase 3: リアルタイム電光掲示板
+**スコープ**: sync + display 連携。
+- `pixoo_tmux_sync.py` に capture-pane 取得を追加
+- ANSI除去 + 制御文字サニタイズ
+- `scroll_text` キーに書き出し
+- display のスクロールを scroll_text から取得に変更
+
+## 既存コード
+- `pixoo_agent_sync.py` — 旧sync（触らない。温存）
+- `pixoo-display-test.py` — 描画本体（Phase 2で改修）
+- `pixoo-sync-wrapper.sh` — syncデーモン起動（Phase 1で修正）
+- `pixoo-display-wrapper.sh` — 描画起動（変更なし）
+
+## コーディング規約
+- Python 3.10+
+- UTF-8
+- docstring必須
+- エラーハンドリング必須（tmux未起動・Pixooオフライン対応）
+- 既存の `/tmp/pixoo-agents.json` フォーマットとの互換性を壊すな
+
+## Safety ルール
+- `rm` 禁止（`trash` を使え）
+- 既存ファイルの上書き前に backup を取れ
+- git commit は Phase ごとに（細かく）
+
+## 完了条件
+- [ ] Phase 1: pixoo_tmux_sync.py が動いて既存 display が表示する
+- [ ] Phase 2: 上部アイコンバーが64x64に収まって表示される
+- [ ] Phase 3: tmux 出力がスクロールテキストに反映される
+- [ ] 全Phase: Codex レビューで🔴が0
+- [ ] git commit + push 完了

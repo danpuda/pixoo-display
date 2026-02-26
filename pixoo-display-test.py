@@ -125,10 +125,18 @@ ROLE_COLORS: dict[str, Tuple[int, int, int]] = {
     "RES": (255, 140, 0),    # orange
 }
 ROLE_DISPLAY_ORDER = {"DIR": 0, "PL": 1, "QA": 2, "SEC": 3, "DEV": 4, "RES": 5}
-ICON_SIZE = 5
-ICON_GAP = 2
-ICON_BAR_H = 8
-ICON_BAR_Y = 2  # vertical offset to center 5px icon in 8px bar
+ICON_BAR_H = 11  # expanded from 8px to fit katakana text labels
+ICON_BAR_FONT_SIZE = 8
+ICON_LABEL_GAP = 1
+
+ROLE_LABELS: dict[str, str] = {
+    "DIR": "監督",
+    "PL":  "リーダー",
+    "DEV": "開発",
+    "QA":  "検証",
+    "SEC": "安全",
+    "RES": "調査",
+}
 
 FONT_CANDIDATES = [
     "/home/yama/.fonts/meiryo.ttc",
@@ -417,7 +425,7 @@ def compose_frame(
     # --- Scroll text position ---
     marquee_y = DISPLAY_SIZE - scroll_text_h - 5
 
-    # --- Icon bar (top 8px): role icons + timer ---
+    # --- Icon bar (top 11px): role text labels + timer ---
     # Build icon list: DIR (if active) + agents sorted by role priority
     # Exclude agents with role="DIR" to avoid double-display with main_active
     icon_entries: list[tuple[str, str]] = []  # (role, status)
@@ -434,7 +442,7 @@ def compose_frame(
         status = a.get("status", "active")
         icon_entries.append((role, status))
 
-    # Timer string (subagents only, use smaller font to fit 8px bar)
+    # Timer string (subagents only, use smaller font to fit 11px bar)
     timer_str = None
     timer_w = 0
     if not hasattr(compose_frame, "_timer_font"):
@@ -447,28 +455,38 @@ def compose_frame(
         tw, _ = text_bbox_size(timer_font, timer_str)
         timer_w = tw + 4  # reserve space with gap
 
-    # Draw role icons (left to right, skip if overlapping timer area)
+    # Draw role labels (left to right, skip labels that don't fit)
     max_icon_x = DISPLAY_SIZE - timer_w
+    if not hasattr(compose_frame, "_label_font"):
+        compose_frame._label_font = load_font(size=ICON_BAR_FONT_SIZE)
+        # Pre-cache label widths (ROLE_LABELS is static)
+        compose_frame._label_widths = {}
+        for r, lbl in ROLE_LABELS.items():
+            w, _ = text_bbox_size(compose_frame._label_font, lbl)
+            compose_frame._label_widths[r] = w
+    label_font = compose_frame._label_font
+    label_widths = compose_frame._label_widths
     ix = 1
     for role, status in icon_entries:
-        if ix + ICON_SIZE > max_icon_x:
-            break
+        label = ROLE_LABELS.get(role, role)
+        if role not in label_widths:
+            label_widths[role], _ = text_bbox_size(label_font, label)
+        label_w = label_widths[role]
+        if ix + label_w > max_icon_x:
+            continue  # skip this label, try shorter ones after it
         color = ROLE_COLORS.get(role, (128, 128, 128))
         if status == "error":
             color = (255, 0, 0)  # solid red for error
         elif status != "active":
             color = (color[0] // 3, color[1] // 3, color[2] // 3)
-        draw.rectangle(
-            [ix, ICON_BAR_Y, ix + ICON_SIZE - 1, ICON_BAR_Y + ICON_SIZE - 1],
-            fill=color,
-        )
-        ix += ICON_SIZE + ICON_GAP
+        draw.text((ix, 1), label, font=label_font, fill=color)
+        ix += label_w + ICON_LABEL_GAP
 
-    # Draw timer in top-right of icon bar (y=0 to fit within 8px)
+    # Draw timer in top-right of icon bar
     if timer_str:
         timer_color = TIMER_COLORS[color_tick % len(TIMER_COLORS)]
         timer_x = DISPLAY_SIZE - timer_w + 2
-        draw.text((timer_x, 0), timer_str, font=timer_font, fill=timer_color)
+        draw.text((timer_x, 2), timer_str, font=timer_font, fill=timer_color)
 
     # --- Scroll text: paste pre-rendered strip (fast!) ---
     strip = _scroll_cache.get_strip(scroll_text, scroll_font)

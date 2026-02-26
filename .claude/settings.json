@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Write(**)",
+      "Edit(**)",
+      "Bash(codex exec*)",
+      "Bash(codex review*)",
+      "Bash(git *)",
+      "Bash(python3 *)",
+      "Bash(pytest *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(wc *)",
+      "Bash(chmod *)"
+    ]
+  }
+}

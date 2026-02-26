@@ -326,3 +326,57 @@ git commit -m "🌀 QA: Phase 5.1 Gemini review"
 
 **🔴 重要**: Geminiレビューが失敗した場合は「CDP不可、Geminiレビュー未実施」と正直に報告しろ。
 SonnetやCodexで代替するな（偽装禁止 = INC-009教訓）。
+
+### Phase 5.3+5.4: 背景透過 + sync統合（DIR指示 2026-02-27）
+
+**2つまとめてやること。順番: 5.4(wrapper統合) → 5.3(背景透過)**
+
+#### Phase 5.4: sync daemon を display-wrapper に統合
+**スコープ**: `pixoo-display-wrapper.sh` の改修
+
+##### 問題点
+- `pixoo-sync-wrapper.sh` と `pixoo-display-wrapper.sh` が**別プロセス**で管理されている
+- display wrapper は生きてるのに sync wrapper だけ死ぬ → JSON更新停止 → TTL 10分切れ → 全エージェント消える → ロブ🦞フォールバック表示
+- これが「tmux表示してたのにいつの間にかロブ🦞に戻ってた」バグの原因
+
+##### 変更内容
+1. **`pixoo-display-wrapper.sh` で sync daemon も起動する**:
+   ```bash
+   # display-wrapper.sh の while true ループの前に:
+   # sync daemon をバックグラウンドで起動
+   python3 -u /home/yama/pixoo-display/pixoo_tmux_sync.py >> /tmp/pixoo-tmux-sync.log 2>&1 &
+   SYNC_PID=$!
+   
+   # trap で cleanup（display終了時にsyncも殺す）
+   cleanup() {
+       kill $SYNC_PID 2>/dev/null
+       wait $SYNC_PID 2>/dev/null
+   }
+   trap cleanup EXIT
+   ```
+2. **while ループ内で sync の生存確認**:
+   ```bash
+   # display 再起動ループ内で毎回チェック
+   if ! kill -0 $SYNC_PID 2>/dev/null; then
+       echo "[$(date)] sync daemon died, restarting..." >> "$LOG"
+       python3 -u /home/yama/pixoo-display/pixoo_tmux_sync.py >> /tmp/pixoo-tmux-sync.log 2>&1 &
+       SYNC_PID=$!
+   fi
+   ```
+3. **`pixoo-sync-wrapper.sh` は温存**（単体テスト用に残す。本番では使わない）
+
+##### 完了条件:
+- [ ] display-wrapper 起動で sync も自動起動される
+- [ ] display 再起動しても sync が生きてる
+- [ ] sync が死んでも display-wrapper が5秒以内に再起動する
+- [ ] `pixoo-sync-wrapper.sh` は変更しない（温存）
+- [ ] git commit
+
+#### Phase 5.3: アイコンバー背景透過（上記参照）
+Phase 5.3 の仕様は上に記載済み。5.4 完了後に着手。
+
+**両Phase完了条件:**
+- [ ] Phase 5.4 + 5.3 両方完了
+- [ ] 全テスト通過
+- [ ] Codexレビューで🔴が0
+- [ ] git commit + push 完了

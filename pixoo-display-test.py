@@ -125,8 +125,8 @@ ROLE_COLORS: dict[str, Tuple[int, int, int]] = {
     "RES": (255, 140, 0),    # orange
 }
 ROLE_DISPLAY_ORDER = {"DIR": 0, "PL": 1, "QA": 2, "SEC": 3, "DEV": 4, "RES": 5}
-ICON_BAR_H = 16  # Phase 5.1: 2-row layout (row1: worker name 6px, row2: role label 8px)
-ICON_BAR_ROW1_FONT_SIZE = 6   # worker name (small)
+ICON_BAR_H = 18  # Phase 5.2: 2-row layout (row1: worker name 8px, row2: role label 9px)
+ICON_BAR_ROW1_FONT_SIZE = 8   # worker name (Phase 5.2: was 6, now 8 for readability)
 ICON_BAR_ROW2_FONT_SIZE = 9   # role label (large, readable on 64px LED)
 ICON_LABEL_GAP = 1
 
@@ -235,6 +235,25 @@ def pilmoji_outlined(pm, xy, text, font, fill):
                 continue
             pm.text((x + ox, y + oy), text, font=font, fill=(0, 0, 0))
     pm.text((x, y), text, font=font, fill=fill)
+
+
+def get_count_color(count: int) -> Tuple[int, int, int]:
+    """Dramatic gradient: 1=bright green → 4=yellow → 7=deep red.
+
+    Uses a hand-tuned 7-stop palette so every count is visually distinct,
+    even on the tiny Pixoo-64 display.
+    """
+    PALETTE = {
+        1: (0, 255, 80),    # bright green
+        2: (100, 255, 0),   # lime
+        3: (200, 230, 0),   # yellow-green
+        4: (255, 200, 0),   # yellow-orange
+        5: (255, 120, 0),   # orange
+        6: (255, 50, 0),    # red-orange
+        7: (255, 0, 0),     # pure red
+    }
+    c = max(1, min(count, 7))
+    return PALETTE[c]
 
 
 def get_latest_task_text(agents: list) -> str | None:
@@ -469,7 +488,7 @@ def compose_frame(
     max_label_x = DISPLAY_SIZE - timer_w
     ix = 1
     row1_y = 0   # worker name row
-    row2_y = 7   # role label row
+    row2_y = 9   # role label row (shifted down for 8px row1 font)
 
     if current_agent is not None:
         role = current_agent.get("role", "DEV")
@@ -487,9 +506,8 @@ def compose_frame(
                     worker_name = worker_name[:-1]
                     wn_w, _ = text_bbox_size(row1_font, worker_name + "..")
                 worker_name = worker_name + ".."
-            # Worker name color: dimmed version of role color
+            # Worker name color: full brightness (same as role label)
             wn_color = ROLE_COLORS.get(role, (128, 128, 128))
-            wn_color = (wn_color[0] * 2 // 3, wn_color[1] * 2 // 3, wn_color[2] * 2 // 3)
             draw.text((ix, row1_y), worker_name, font=row1_font, fill=wn_color)
 
         # Row 2: Role label (large, readable)
@@ -516,6 +534,21 @@ def compose_frame(
         timer_color = TIMER_COLORS[color_tick % len(TIMER_COLORS)]
         timer_x = DISPLAY_SIZE - timer_w + 2
         draw.text((timer_x, row2_y + 1), timer_str, font=timer_font, fill=timer_color)
+
+    # --- Top-right count: xN (agent count) in row 1 ---
+    agent_count = len(agents)
+    if agent_count >= 1:
+        count_str = str(agent_count)
+        x_label = "x"
+        count_color = get_count_color(agent_count)
+        x_w, _ = text_bbox_size(ui_font, x_label)
+        n_w, _ = text_bbox_size(ui_font, count_str)
+        gap = 1
+        total_w = x_w + gap + n_w
+        x0 = DISPLAY_SIZE - total_w - 1
+        y0 = 1
+        draw_outlined_text(draw, (x0, y0), x_label, ui_font, fill=(140, 140, 140))
+        draw_outlined_text(draw, (x0 + x_w + gap, y0), count_str, ui_font, fill=count_color)
 
     # --- Scroll text: paste pre-rendered strip (fast!) ---
     strip = _scroll_cache.get_strip(scroll_text, scroll_font)

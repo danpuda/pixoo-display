@@ -125,17 +125,18 @@ ROLE_COLORS: dict[str, Tuple[int, int, int]] = {
     "RES": (255, 140, 0),    # orange
 }
 ROLE_DISPLAY_ORDER = {"DIR": 0, "PL": 1, "QA": 2, "SEC": 3, "DEV": 4, "RES": 5}
-ICON_BAR_H = 11  # expanded from 8px to fit katakana text labels
-ICON_BAR_FONT_SIZE = 8
+ICON_BAR_H = 16  # Phase 5.1: 2-row layout (row1: worker name 6px, row2: role label 8px)
+ICON_BAR_ROW1_FONT_SIZE = 6   # worker name (small)
+ICON_BAR_ROW2_FONT_SIZE = 9   # role label (large, readable on 64px LED)
 ICON_LABEL_GAP = 1
 
 ROLE_LABELS: dict[str, str] = {
-    "DIR": "監",
+    "DIR": "DIR",
     "PL":  "PL",
-    "DEV": "開",
-    "QA":  "検",
-    "SEC": "安",
-    "RES": "調",
+    "DEV": "DEV",
+    "QA":  "QA",
+    "SEC": "SEC",
+    "RES": "RES",
 }
 
 FONT_CANDIDATES = [
@@ -422,13 +423,14 @@ def compose_frame(
 ) -> Image.Image:
     """Compose a single display frame with icon bar, character, and scroll text.
 
-    Phase 5-A: Icon bar shows only the currently displayed character's role.
-    If DEV with multiple DEVs, task name is appended for identification.
+    Phase 5.1: 2-row icon bar layout.
+    Row 1 (top, 6px font): worker name (task name).
+    Row 2 (bottom, 9px font): role label in English (DIR/PL/DEV/QA/SEC/RES) + timer.
     """
     img = Image.new("RGB", (DISPLAY_SIZE, DISPLAY_SIZE), (0, 0, 0))
 
     # --- Character: shift down to make room for icon bar ---
-    # Crop top 12px of sprite (4px original + 8px icon bar), paste below bar
+    # Crop top of sprite (4px margin + ICON_BAR_H), paste below 2-row bar
     img.paste(
         bg_frame.crop((0, 4 + ICON_BAR_H, DISPLAY_SIZE, DISPLAY_SIZE)),
         (0, ICON_BAR_H),
@@ -438,16 +440,25 @@ def compose_frame(
     # --- Scroll text position ---
     marquee_y = DISPLAY_SIZE - scroll_text_h - 5
 
-    # --- Icon bar (top 11px): current character's role + timer ---
-    # Phase 5-A: Show only the currently displayed character's role
+    # --- Icon bar (top 16px, 2-row layout) ---
+    # Phase 5.1: Row 1 (y=0-7): worker name in small font
+    #            Row 2 (y=7-15): role label in large font + timer
     # Phase 5-B: waiting=full brightness, error=red, idle/other=2/3 brightness
 
-    # Timer string (subagents only, use smaller font to fit 11px bar)
-    timer_str = None
-    timer_w = 0
+    # Lazy-init fonts for both rows
+    if not hasattr(compose_frame, "_row1_font"):
+        compose_frame._row1_font = load_font(size=ICON_BAR_ROW1_FONT_SIZE)
+    if not hasattr(compose_frame, "_row2_font"):
+        compose_frame._row2_font = load_font(size=ICON_BAR_ROW2_FONT_SIZE)
     if not hasattr(compose_frame, "_timer_font"):
         compose_frame._timer_font = load_font(size=7)
+    row1_font = compose_frame._row1_font
+    row2_font = compose_frame._row2_font
     timer_font = compose_frame._timer_font
+
+    # Timer string (subagents only, rendered in row 2 right side)
+    timer_str = None
+    timer_w = 0
     if not is_main and elapsed_sec is not None:
         minutes = int(elapsed_sec) // 60
         seconds = int(elapsed_sec) % 60
@@ -455,38 +466,33 @@ def compose_frame(
         tw, _ = text_bbox_size(timer_font, timer_str)
         timer_w = tw + 4  # reserve space with gap
 
-    # Draw current character's role label
-    max_icon_x = DISPLAY_SIZE - timer_w
-    if not hasattr(compose_frame, "_label_font"):
-        compose_frame._label_font = load_font(size=ICON_BAR_FONT_SIZE)
-        compose_frame._label_widths = {}
-        for r, lbl in ROLE_LABELS.items():
-            w, _ = text_bbox_size(compose_frame._label_font, lbl)
-            compose_frame._label_widths[r] = w
-    label_font = compose_frame._label_font
-
+    max_label_x = DISPLAY_SIZE - timer_w
     ix = 1
+    row1_y = 0   # worker name row
+    row2_y = 7   # role label row
+
     if current_agent is not None:
         role = current_agent.get("role", "DEV")
         status = current_agent.get("status", "active")
         label = ROLE_LABELS.get(role, role)
 
-        # DEV with multiple DEVs: append task name for identification
-        if role == "DEV":
-            dev_count = sum(1 for a in agents if a.get("role") == "DEV")
-            if dev_count > 1:
-                task = current_agent.get("task", "")
-                if task:
-                    short_task = task[:12]
-                    candidate = f"{label}:{short_task}"
-                    # Progressively shorten to fit within max_icon_x
-                    cw, _ = text_bbox_size(label_font, candidate)
-                    while cw > max_icon_x - ix and len(short_task) > 2:
-                        short_task = short_task[:-1]
-                        candidate = f"{label}:{short_task}"
-                        cw, _ = text_bbox_size(label_font, candidate)
-                    label = candidate
+        # Row 1: Worker name (task name from agent)
+        worker_name = current_agent.get("task", current_agent.get("id", ""))
+        if worker_name:
+            # Truncate to fit within available width
+            max_w = DISPLAY_SIZE - 2
+            wn_w, _ = text_bbox_size(row1_font, worker_name)
+            if wn_w > max_w:
+                while len(worker_name) > 3 and wn_w > max_w:
+                    worker_name = worker_name[:-1]
+                    wn_w, _ = text_bbox_size(row1_font, worker_name + "..")
+                worker_name = worker_name + ".."
+            # Worker name color: dimmed version of role color
+            wn_color = ROLE_COLORS.get(role, (128, 128, 128))
+            wn_color = (wn_color[0] * 2 // 3, wn_color[1] * 2 // 3, wn_color[2] * 2 // 3)
+            draw.text((ix, row1_y), worker_name, font=row1_font, fill=wn_color)
 
+        # Row 2: Role label (large, readable)
         color = ROLE_COLORS.get(role, (128, 128, 128))
         # Phase 5-B: brightness rules
         if status == "error":
@@ -498,18 +504,18 @@ def compose_frame(
             color = (color[0] * 2 // 3, color[1] * 2 // 3, color[2] * 2 // 3)
         # else: active → full brightness
 
-        draw.text((ix, 1), label, font=label_font, fill=color)
+        draw.text((ix, row2_y), label, font=row2_font, fill=color)
     elif is_main and main_active:
         # DIR (main session active, no current_agent)
         label = ROLE_LABELS.get("DIR", "DIR")
         color = ROLE_COLORS.get("DIR", (180, 0, 255))
-        draw.text((ix, 1), label, font=label_font, fill=color)
+        draw.text((ix, row2_y), label, font=row2_font, fill=color)
 
-    # Draw timer in top-right of icon bar
+    # Draw timer in row 2 right side
     if timer_str:
         timer_color = TIMER_COLORS[color_tick % len(TIMER_COLORS)]
         timer_x = DISPLAY_SIZE - timer_w + 2
-        draw.text((timer_x, 2), timer_str, font=timer_font, fill=timer_color)
+        draw.text((timer_x, row2_y + 1), timer_str, font=timer_font, fill=timer_color)
 
     # --- Scroll text: paste pre-rendered strip (fast!) ---
     strip = _scroll_cache.get_strip(scroll_text, scroll_font)

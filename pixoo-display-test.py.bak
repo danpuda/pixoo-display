@@ -115,21 +115,6 @@ TIMER_COLORS = [
     (255, 60, 200),
 ]
 
-# --- Icon bar (Phase 2) ---
-ROLE_COLORS: dict[str, Tuple[int, int, int]] = {
-    "DIR": (180, 0, 255),    # purple
-    "PL":  (0, 120, 255),    # blue
-    "DEV": (0, 200, 80),     # green
-    "QA":  (255, 200, 0),    # yellow
-    "SEC": (255, 60, 60),    # red
-    "RES": (255, 140, 0),    # orange
-}
-ROLE_DISPLAY_ORDER = {"DIR": 0, "PL": 1, "QA": 2, "SEC": 3, "DEV": 4, "RES": 5}
-ICON_SIZE = 5
-ICON_GAP = 2
-ICON_BAR_H = 8
-ICON_BAR_Y = 2  # vertical offset to center 5px icon in 8px bar
-
 FONT_CANDIDATES = [
     "/home/yama/.fonts/meiryo.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
@@ -222,6 +207,25 @@ def pilmoji_outlined(pm, xy, text, font, fill):
                 continue
             pm.text((x + ox, y + oy), text, font=font, fill=(0, 0, 0))
     pm.text((x, y), text, font=font, fill=fill)
+
+
+def get_count_color(count: int) -> Tuple[int, int, int]:
+    """Dramatic gradient: 1=bright green → 4=yellow → 7=deep red.
+
+    Uses a hand-tuned 7-stop palette so every count is visually distinct,
+    even on the tiny Pixoo-64 display.
+    """
+    PALETTE = {
+        1: (0, 255, 80),    # bright green
+        2: (100, 255, 0),   # lime
+        3: (200, 230, 0),   # yellow-green
+        4: (255, 200, 0),   # yellow-orange
+        5: (255, 120, 0),   # orange
+        6: (255, 50, 0),    # red-orange
+        7: (255, 0, 0),     # pure red
+    }
+    c = max(1, min(count, 7))
+    return PALETTE[c]
 
 
 def get_latest_task_text(agents: list) -> str | None:
@@ -374,86 +378,59 @@ def compose_frame(
     ui_font: ImageFont.ImageFont,
     scroll_text: str,
     scroll_x: int,
-    agents: list,
-    main_active: bool,
+    agent_count: int,
     elapsed_sec: float | None,
     color_tick: int,
     is_main: bool,
     scroll_text_h: int,
 ) -> Image.Image:
-    """Compose a single display frame with icon bar, character, and scroll text."""
+    # Shift lobster up by 4px
     img = Image.new("RGB", (DISPLAY_SIZE, DISPLAY_SIZE), (0, 0, 0))
-
-    # --- Character: shift down to make room for icon bar ---
-    # Crop top 12px of sprite (4px original + 8px icon bar), paste below bar
-    img.paste(
-        bg_frame.crop((0, 4 + ICON_BAR_H, DISPLAY_SIZE, DISPLAY_SIZE)),
-        (0, ICON_BAR_H),
-    )
+    img.paste(bg_frame.crop((0, 4, DISPLAY_SIZE, DISPLAY_SIZE)), (0, 0))
     draw = ImageDraw.Draw(img)
 
     # --- Scroll text position ---
-    marquee_y = DISPLAY_SIZE - scroll_text_h - 5
+    marquee_y = DISPLAY_SIZE - scroll_text_h - 5  # adjusted: was -8 (too high), -5 balances visibility + descender safety
 
-    # --- Icon bar (top 8px): role icons + timer ---
-    # Build icon list: DIR (if active) + agents sorted by role priority
-    # Exclude agents with role="DIR" to avoid double-display with main_active
-    icon_entries: list[tuple[str, str]] = []  # (role, status)
-    if main_active:
-        icon_entries.append(("DIR", "active"))
-    sorted_agents = sorted(
-        agents,
-        key=lambda a: ROLE_DISPLAY_ORDER.get(a.get("role", "DEV"), 99),
-    )
-    for a in sorted_agents:
-        role = a.get("role", "DEV")
-        if role == "DIR":
-            continue  # DIR handled via main_active flag
-        status = a.get("status", "active")
-        icon_entries.append((role, status))
+    # --- Timer: subagents only, rainbow color cycling ---
+    # Pre-compute max timer height to prevent vertical jitter
+    # (different digits have different bbox y_top: "1:23" → h=8, "0:00" → h=7)
+    _TIMER_MAX_H = text_bbox_size(ui_font, "12:34")[1]  # worst-case height
 
-    # Timer string (subagents only, use smaller font to fit 8px bar)
     timer_str = None
-    timer_w = 0
-    if not hasattr(compose_frame, "_timer_font"):
-        compose_frame._timer_font = load_font(size=7)
-    timer_font = compose_frame._timer_font
     if not is_main and elapsed_sec is not None:
         minutes = int(elapsed_sec) // 60
         seconds = int(elapsed_sec) % 60
         timer_str = f"{minutes}:{seconds:02d}"
-        tw, _ = text_bbox_size(timer_font, timer_str)
-        timer_w = tw + 4  # reserve space with gap
-
-    # Draw role icons (left to right, skip if overlapping timer area)
-    max_icon_x = DISPLAY_SIZE - timer_w
-    ix = 1
-    for role, status in icon_entries:
-        if ix + ICON_SIZE > max_icon_x:
-            break
-        color = ROLE_COLORS.get(role, (128, 128, 128))
-        if status != "active":
-            color = (color[0] // 3, color[1] // 3, color[2] // 3)
-        draw.rectangle(
-            [ix, ICON_BAR_Y, ix + ICON_SIZE - 1, ICON_BAR_Y + ICON_SIZE - 1],
-            fill=color,
-        )
-        ix += ICON_SIZE + ICON_GAP
-
-    # Draw timer in top-right of icon bar (y=0 to fit within 8px)
-    if timer_str:
+        tw, _ = text_bbox_size(ui_font, timer_str)
+        timer_x = DISPLAY_SIZE - tw - 1
+        timer_y = marquee_y - _TIMER_MAX_H - 3  # fixed height, no jitter
         timer_color = TIMER_COLORS[color_tick % len(TIMER_COLORS)]
-        timer_x = DISPLAY_SIZE - timer_w + 2
-        draw.text((timer_x, 0), timer_str, font=timer_font, fill=timer_color)
+        draw_outlined_text(draw, (timer_x, timer_y), timer_str, ui_font, fill=timer_color)
 
     # --- Scroll text: paste pre-rendered strip (fast!) ---
     strip = _scroll_cache.get_strip(scroll_text, scroll_font)
+    # Crop the visible portion of the strip
     src_x = max(0, -scroll_x)
     dst_x = max(0, scroll_x)
     visible_w = min(DISPLAY_SIZE - dst_x, strip.width - src_x)
     if visible_w > 0 and src_x < strip.width:
         text_region = strip.crop((src_x, 0, src_x + visible_w, strip.height))
         img.paste(text_region, (dst_x, marquee_y - 2), text_region)
+
+    # --- Top-right count ---
+    if agent_count >= 1:
+        count_str = str(agent_count)
+        x_label = "x"
+        count_color = get_count_color(agent_count)
+        x_w, _ = text_bbox_size(ui_font, x_label)
+        n_w, _ = text_bbox_size(ui_font, count_str)
+        gap = 1
+        total_w = x_w + gap + n_w
+        x0 = DISPLAY_SIZE - total_w - 1
+        y0 = 1
+        draw_outlined_text(draw, (x0, y0), x_label, ui_font, fill=(140, 140, 140))
+        draw_outlined_text(draw, (x0 + x_w + gap, y0), count_str, ui_font, fill=count_color)
 
     return img
 
@@ -499,8 +476,6 @@ def run(duration_sec: float | None = None) -> None:
     display_idx = 0
     current_display_char: str | None = None  # Track by name, not index
     agent_count = 0
-    current_agents: list = []       # Phase 2: full agent list for icon bar
-    current_main_active: bool = False
     is_sleeping = False
     last_active_time = time.monotonic()
 
@@ -527,8 +502,6 @@ def run(duration_sec: float | None = None) -> None:
             # Poll state file
             if now - last_state_check_t >= STATE_POLL_SEC:
                 agents, main_active = read_agent_state()
-                current_agents = agents
-                current_main_active = main_active
                 new_count = len(agents)
 
                 # サブエージェント活動中 → サブエージェントだけ表示（ロブ🦞なし）
@@ -692,8 +665,7 @@ def run(duration_sec: float | None = None) -> None:
                     ui_font=ui_font,
                     scroll_text=current_ticker,
                     scroll_x=text_x,
-                    agents=current_agents,
-                    main_active=current_main_active,
+                    agent_count=agent_count,
                     elapsed_sec=elapsed,
                     color_tick=color_tick,
                     is_main=is_main_flag,

@@ -442,27 +442,22 @@ def compose_frame(
 ) -> Image.Image:
     """Compose a single display frame with icon bar, character, and scroll text.
 
-    Phase 5.1: 2-row icon bar layout.
-    Row 1 (top, 6px font): worker name (task name).
-    Row 2 (bottom, 9px font): role label in English (DIR/PL/DEV/QA/SEC/RES) + timer.
+    Phase 5.3: Sprite is drawn full-size. Icon bar text is rendered on a
+    transparent RGBA overlay with draw_outlined_text for contrast, then
+    composited on top of the sprite via alpha mask (same technique as
+    the scroll text strip).
     """
     img = Image.new("RGB", (DISPLAY_SIZE, DISPLAY_SIZE), (0, 0, 0))
 
-    # --- Character: shift down to make room for icon bar ---
-    # Crop top of sprite (4px margin + ICON_BAR_H), paste below 2-row bar
-    img.paste(
-        bg_frame.crop((0, 4 + ICON_BAR_H, DISPLAY_SIZE, DISPLAY_SIZE)),
-        (0, ICON_BAR_H),
-    )
-    draw = ImageDraw.Draw(img)
+    # --- Character: full-size sprite (only 4px top margin crop) ---
+    img.paste(bg_frame.crop((0, 4, DISPLAY_SIZE, DISPLAY_SIZE)), (0, 0))
 
     # --- Scroll text position ---
     marquee_y = DISPLAY_SIZE - scroll_text_h - 5
 
-    # --- Icon bar (top 16px, 2-row layout) ---
-    # Phase 5.1: Row 1 (y=0-7): worker name in small font
-    #            Row 2 (y=7-15): role label in large font + timer
-    # Phase 5-B: waiting=full brightness, error=red, idle/other=2/3 brightness
+    # --- Transparent overlay for icon bar + xN count ---
+    overlay = Image.new("RGBA", (DISPLAY_SIZE, DISPLAY_SIZE), (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
 
     # Lazy-init fonts for both rows
     if not hasattr(compose_frame, "_row1_font"):
@@ -485,10 +480,9 @@ def compose_frame(
         tw, _ = text_bbox_size(timer_font, timer_str)
         timer_w = tw + 4  # reserve space with gap
 
-    max_label_x = DISPLAY_SIZE - timer_w
     ix = 1
     row1_y = 0   # worker name row
-    row2_y = 9   # role label row (shifted down for 8px row1 font)
+    row2_y = 9   # role label row
 
     if current_agent is not None:
         role = current_agent.get("role", "DEV")
@@ -498,7 +492,6 @@ def compose_frame(
         # Row 1: Worker name (task name from agent)
         worker_name = current_agent.get("task", current_agent.get("id", ""))
         if worker_name:
-            # Truncate to fit within available width
             max_w = DISPLAY_SIZE - 2
             wn_w, _ = text_bbox_size(row1_font, worker_name)
             if wn_w > max_w:
@@ -506,34 +499,29 @@ def compose_frame(
                     worker_name = worker_name[:-1]
                     wn_w, _ = text_bbox_size(row1_font, worker_name + "..")
                 worker_name = worker_name + ".."
-            # Worker name color: full brightness (same as role label)
             wn_color = ROLE_COLORS.get(role, (128, 128, 128))
-            draw.text((ix, row1_y), worker_name, font=row1_font, fill=wn_color)
+            draw_outlined_text(odraw, (ix, row1_y), worker_name, row1_font, fill=wn_color)
 
-        # Row 2: Role label (large, readable)
+        # Row 2: Role label
         color = ROLE_COLORS.get(role, (128, 128, 128))
-        # Phase 5-B: brightness rules
         if status == "error":
             color = (255, 0, 0)
         elif status == "waiting":
-            pass  # full brightness — waiting is normal
+            pass  # full brightness
         elif status not in ("active",):
-            # idle/other → 2/3 brightness
             color = (color[0] * 2 // 3, color[1] * 2 // 3, color[2] * 2 // 3)
-        # else: active → full brightness
 
-        draw.text((ix, row2_y), label, font=row2_font, fill=color)
+        draw_outlined_text(odraw, (ix, row2_y), label, row2_font, fill=color)
     elif is_main and main_active:
-        # DIR (main session active, no current_agent)
         label = ROLE_LABELS.get("DIR", "DIR")
         color = ROLE_COLORS.get("DIR", (180, 0, 255))
-        draw.text((ix, row2_y), label, font=row2_font, fill=color)
+        draw_outlined_text(odraw, (ix, row2_y), label, row2_font, fill=color)
 
-    # Draw timer in row 2 right side
+    # Timer in row 2 right side
     if timer_str:
         timer_color = TIMER_COLORS[color_tick % len(TIMER_COLORS)]
         timer_x = DISPLAY_SIZE - timer_w + 2
-        draw.text((timer_x, row2_y + 1), timer_str, font=timer_font, fill=timer_color)
+        draw_outlined_text(odraw, (timer_x, row2_y + 1), timer_str, timer_font, fill=timer_color)
 
     # --- Top-right count: xN (agent count) in row 1 ---
     agent_count = len(agents)
@@ -547,8 +535,11 @@ def compose_frame(
         total_w = x_w + gap + n_w
         x0 = DISPLAY_SIZE - total_w - 1
         y0 = 1
-        draw_outlined_text(draw, (x0, y0), x_label, ui_font, fill=(140, 140, 140))
-        draw_outlined_text(draw, (x0 + x_w + gap, y0), count_str, ui_font, fill=count_color)
+        draw_outlined_text(odraw, (x0, y0), x_label, ui_font, fill=(140, 140, 140))
+        draw_outlined_text(odraw, (x0 + x_w + gap, y0), count_str, ui_font, fill=count_color)
+
+    # Composite transparent overlay onto sprite
+    img.paste(overlay, (0, 0), overlay)
 
     # --- Scroll text: paste pre-rendered strip (fast!) ---
     strip = _scroll_cache.get_strip(scroll_text, scroll_font)

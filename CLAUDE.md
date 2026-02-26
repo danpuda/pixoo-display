@@ -258,6 +258,48 @@ if agent_count >= 1:
 - [ ] Codexレビューで🔴が0
 - [ ] git commit 完了
 
+### Phase 5.3: アイコンバー背景透過（DIR指示 2026-02-27）
+**スコープ**: `pixoo-display-test.py` の `compose_frame()` — アイコンバーの描画方式変更
+
+#### 問題点
+アイコンバー（上部18px）が黒塗り背景でスプライト（ロブスター🦞）の頭を隠してしまう。
+スクロールテキスト（下部）は透過strip + マスク付きpasteで正しく透過してるのに、
+アイコンバーのテキストは黒背景の上に直接描画されている。
+
+#### 現在のコード（問題箇所）
+```python
+img = Image.new("RGB", (DISPLAY_SIZE, DISPLAY_SIZE), (0, 0, 0))  # 黒背景
+img.paste(
+    bg_frame.crop((0, 4 + ICON_BAR_H, DISPLAY_SIZE, DISPLAY_SIZE)),  # スプライト上部をカット
+    (0, ICON_BAR_H),  # 18px下にペースト → 上部18pxは真っ黒
+)
+draw = ImageDraw.Draw(img)
+draw.text(...)  # 黒い背景の上にテキスト → スプライトが隠れる
+```
+
+#### 修正方針
+1. **スプライトをカットせずフルサイズで描画**（上部マージンだけ残す）
+2. **アイコンバーのテキストを透過オーバーレイとして重ねる**（スクロールテキストと同じ方式）
+   - `Image.new("RGBA", ..., (0,0,0,0))` で透過レイヤー作成
+   - テキストを透過レイヤーに描画
+   - `img.paste(overlay, (0,0), overlay)` でマスク付き合成
+3. **×N カウント表示も同じ透過レイヤーに描画する**
+
+#### 参考: スクロールテキストの透過方式（正しい例）
+```python
+strip = Image.new("RGBA", (w, h), (0, 0, 0, 0))  # 透過
+# ... テキスト描画 ...
+text_region = strip.crop(...)
+img.paste(text_region, (dst_x, marquee_y - 2), text_region)  # マスク付き
+```
+
+**完了条件:**
+- [ ] スプライトの頭がアイコンバー越しに見える
+- [ ] テキストは読める（背景透過でもコントラスト確保 — `draw_outlined_text` 使用推奨）
+- [ ] ×Nカウントも透過
+- [ ] 全テスト通過
+- [ ] git commit 完了
+
 ## ⚠️ Geminiレビュー手順（Phase 5.1 で必須！）
 
 Codexレビュー完了後、**Geminiレビューも実施すること**。

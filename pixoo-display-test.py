@@ -130,12 +130,12 @@ ICON_BAR_FONT_SIZE = 8
 ICON_LABEL_GAP = 1
 
 ROLE_LABELS: dict[str, str] = {
-    "DIR": "監督",
-    "PL":  "リーダー",
-    "DEV": "開発",
-    "QA":  "検証",
-    "SEC": "安全",
-    "RES": "調査",
+    "DIR": "監",
+    "PL":  "PL",
+    "DEV": "開",
+    "QA":  "検",
+    "SEC": "安",
+    "RES": "調",
 }
 
 FONT_CANDIDATES = [

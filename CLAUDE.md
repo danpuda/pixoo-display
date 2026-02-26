@@ -26,13 +26,17 @@ codex exec --full-auto -C /home/yama/pixoo-display \
   "## コードレビュー
 対象: [変更したファイル名]
 チェック: バグ・ロジックエラー・エッジケース・セキュリティ
-出力: 🔴致命的/🟡改善/🟢良い点 + スコアX/100
+出力: reviews/codex-phaseN-YYYYMMDD.md にファイルとして書き出せ（stdoutではなくファイル）
+フォーマット: 🔴致命的/🟡改善/🟢良い点 + スコアX/100
+書いたら: git add reviews/ && git commit -m '🤓 QA: Phase N Codex review'
 日本語で。"
 ```
 
 - 🔴致命的 が出たら **必ず修正してから次のPhaseに進め**
 - 🟡改善 は判断して対応（全部やらなくてOK）
 - 修正後は再レビュー（🔴が0になるまで）
+- **レビュー結果は必ず `reviews/` ディレクトリにファイル保存**（stdout出力だけは禁止）
+- **`reviews/` にファイルがないPhaseは完了と認めない** — git log で検証される
 
 ## 実装フェーズ
 

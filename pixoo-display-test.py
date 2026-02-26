@@ -60,11 +60,11 @@ from pilmoji import Pilmoji  # noqa: E402
 PIXOO_IP = "192.168.86.42"
 DISPLAY_SIZE = 64
 FRAME_INTERVAL_MS = 250
-SCROLL_SPEED_MS = 100  # 10 FPS scroll (was 50ms=20FPS, Pilmoji redraw was burning CPU)
+SCROLL_SPEED_MS = 150  # ~6.7 FPS scroll (Phase 5-C: reduced from 100ms to save CPU)
 TEXT_STEP_PX = 1
 CHARACTER_SWAP_SEC = 5.0
 STATE_FILE = Path("/tmp/pixoo-agents.json")
-STATE_POLL_SEC = 1.0
+STATE_POLL_SEC = 3.0  # Phase 5-C: sync daemon polls every 3s, no need to check faster
 SLEEP_AFTER_SEC = 1200  # 20 minutes idle — 10分だとロブ🦞が思考中に寝てしまう問題の修正
 AGENT_TTL_SEC = 600    # auto-expire agents after 10 minutes (safety net)
 
@@ -198,7 +198,13 @@ def read_agent_state() -> tuple[list, bool]:
         # TTL: auto-expire stale agents (safety net for missed removes)
         # Use last_seen (when sync daemon last wrote) instead of started (session creation)
         now = time.time()
-        live = [a for a in agents if now - a.get("last_seen", a.get("started", now)) < AGENT_TTL_SEC]
+        def _safe_ts(a: dict) -> float:
+            """Safely extract timestamp, defaulting to now for invalid values."""
+            try:
+                return float(a.get("last_seen", a.get("started", now)))
+            except (TypeError, ValueError):
+                return now
+        live = [a for a in agents if now - _safe_ts(a) < AGENT_TTL_SEC]
         if len(live) < len(agents):
             expired = len(agents) - len(live)
             print(f"[i] TTL expired {expired} agent(s)")
@@ -206,7 +212,7 @@ def read_agent_state() -> tuple[list, bool]:
             # Only sync daemon should write (atomic via tempfile+os.replace).
             # Display side is read-only to avoid race conditions.
         return live, main_active
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, TypeError, ValueError):
         return [], False
 
 
@@ -238,6 +244,8 @@ def get_latest_task_text(agents: list) -> str | None:
     if not agents:
         return None
 
+    MAX_TICKER_LEN = 150  # Phase 5: cap ticker length to prevent OOM from huge strings
+
     # Prefer active agents with scroll_text
     active_with_text = [
         a for a in agents
@@ -246,19 +254,21 @@ def get_latest_task_text(agents: list) -> str | None:
     if active_with_text:
         latest = max(active_with_text, key=lambda a: a.get("last_seen", 0))
         role = latest.get("role", "?")
-        return f"[{role}] {latest['scroll_text']}"
+        text = latest["scroll_text"][:MAX_TICKER_LEN]
+        return f"[{role}] {text}"
 
     # Any agent with scroll_text
     with_text = [a for a in agents if a.get("scroll_text")]
     if with_text:
         latest = max(with_text, key=lambda a: a.get("last_seen", 0))
         role = latest.get("role", "?")
-        return f"[{role}] {latest['scroll_text']}"
+        text = latest["scroll_text"][:MAX_TICKER_LEN]
+        return f"[{role}] {text}"
 
     # Fallback to task name
     sorted_agents = sorted(agents, key=lambda a: a.get("started", 0), reverse=True)
     latest = sorted_agents[0]
-    task = latest.get("task", "")
+    task = str(latest.get("task", ""))[:MAX_TICKER_LEN]
     char = latest.get("char", "?")
     if task:
         return f"[{char}] {task}"
@@ -408,8 +418,13 @@ def compose_frame(
     color_tick: int,
     is_main: bool,
     scroll_text_h: int,
+    current_agent: dict | None = None,
 ) -> Image.Image:
-    """Compose a single display frame with icon bar, character, and scroll text."""
+    """Compose a single display frame with icon bar, character, and scroll text.
+
+    Phase 5-A: Icon bar shows only the currently displayed character's role.
+    If DEV with multiple DEVs, task name is appended for identification.
+    """
     img = Image.new("RGB", (DISPLAY_SIZE, DISPLAY_SIZE), (0, 0, 0))
 
     # --- Character: shift down to make room for icon bar ---
@@ -423,22 +438,9 @@ def compose_frame(
     # --- Scroll text position ---
     marquee_y = DISPLAY_SIZE - scroll_text_h - 5
 
-    # --- Icon bar (top 11px): role text labels + timer ---
-    # Build icon list: DIR (if active) + agents sorted by role priority
-    # Exclude agents with role="DIR" to avoid double-display with main_active
-    icon_entries: list[tuple[str, str]] = []  # (role, status)
-    if main_active:
-        icon_entries.append(("DIR", "active"))
-    sorted_agents = sorted(
-        agents,
-        key=lambda a: ROLE_DISPLAY_ORDER.get(a.get("role", "DEV"), 99),
-    )
-    for a in sorted_agents:
-        role = a.get("role", "DEV")
-        if role == "DIR":
-            continue  # DIR handled via main_active flag
-        status = a.get("status", "active")
-        icon_entries.append((role, status))
+    # --- Icon bar (top 11px): current character's role + timer ---
+    # Phase 5-A: Show only the currently displayed character's role
+    # Phase 5-B: waiting=full brightness, error=red, idle/other=2/3 brightness
 
     # Timer string (subagents only, use smaller font to fit 11px bar)
     timer_str = None
@@ -453,32 +455,55 @@ def compose_frame(
         tw, _ = text_bbox_size(timer_font, timer_str)
         timer_w = tw + 4  # reserve space with gap
 
-    # Draw role labels (left to right, skip labels that don't fit)
+    # Draw current character's role label
     max_icon_x = DISPLAY_SIZE - timer_w
     if not hasattr(compose_frame, "_label_font"):
         compose_frame._label_font = load_font(size=ICON_BAR_FONT_SIZE)
-        # Pre-cache label widths (ROLE_LABELS is static)
         compose_frame._label_widths = {}
         for r, lbl in ROLE_LABELS.items():
             w, _ = text_bbox_size(compose_frame._label_font, lbl)
             compose_frame._label_widths[r] = w
     label_font = compose_frame._label_font
-    label_widths = compose_frame._label_widths
+
     ix = 1
-    for role, status in icon_entries:
+    if current_agent is not None:
+        role = current_agent.get("role", "DEV")
+        status = current_agent.get("status", "active")
         label = ROLE_LABELS.get(role, role)
-        if role not in label_widths:
-            label_widths[role], _ = text_bbox_size(label_font, label)
-        label_w = label_widths[role]
-        if ix + label_w > max_icon_x:
-            continue  # skip this label, try shorter ones after it
+
+        # DEV with multiple DEVs: append task name for identification
+        if role == "DEV":
+            dev_count = sum(1 for a in agents if a.get("role") == "DEV")
+            if dev_count > 1:
+                task = current_agent.get("task", "")
+                if task:
+                    short_task = task[:12]
+                    candidate = f"{label}:{short_task}"
+                    # Progressively shorten to fit within max_icon_x
+                    cw, _ = text_bbox_size(label_font, candidate)
+                    while cw > max_icon_x - ix and len(short_task) > 2:
+                        short_task = short_task[:-1]
+                        candidate = f"{label}:{short_task}"
+                        cw, _ = text_bbox_size(label_font, candidate)
+                    label = candidate
+
         color = ROLE_COLORS.get(role, (128, 128, 128))
+        # Phase 5-B: brightness rules
         if status == "error":
-            color = (255, 0, 0)  # solid red for error
-        elif status != "active":
-            color = (color[0] // 3, color[1] // 3, color[2] // 3)
+            color = (255, 0, 0)
+        elif status == "waiting":
+            pass  # full brightness — waiting is normal
+        elif status not in ("active",):
+            # idle/other → 2/3 brightness
+            color = (color[0] * 2 // 3, color[1] * 2 // 3, color[2] * 2 // 3)
+        # else: active → full brightness
+
         draw.text((ix, 1), label, font=label_font, fill=color)
-        ix += label_w + ICON_LABEL_GAP
+    elif is_main and main_active:
+        # DIR (main session active, no current_agent)
+        label = ROLE_LABELS.get("DIR", "DIR")
+        color = ROLE_COLORS.get("DIR", (180, 0, 255))
+        draw.text((ix, 1), label, font=label_font, fill=color)
 
     # Draw timer in top-right of icon bar
     if timer_str:
@@ -557,6 +582,7 @@ def run(duration_sec: float | None = None) -> None:
     current_main_active: bool = False
     is_sleeping = False
     last_active_time = time.monotonic()
+    last_pushed_key: tuple | None = None  # Phase 5-C: skip redundant pushes
 
     start = time.monotonic()
     next_frame_t = start
@@ -740,35 +766,54 @@ def run(duration_sec: float | None = None) -> None:
                     if not is_main_flag and cur_entry.get("started"):
                         elapsed = wall_now - cur_entry["started"]
 
-                composed = compose_frame(
-                    bg_frame=bg,
-                    scroll_font=scroll_font,
-                    ui_font=ui_font,
-                    scroll_text=current_ticker,
-                    scroll_x=text_x,
-                    agents=current_agents,
-                    main_active=current_main_active,
-                    elapsed_sec=elapsed,
-                    color_tick=color_tick,
-                    is_main=is_main_flag,
-                    scroll_text_h=scroll_text_h,
-                )
-                try:
-                    pixoo.draw_image(composed)
-                    pixoo.push()
-                except Exception as e:
-                    print(f"[!] Pixoo send failed: {e}")
-                    time.sleep(5)  # Back off before retry
-                    try:
-                        pixoo = Pixoo(PIXOO_IP)
-                        print("[i] Pixoo reconnect attempted")
-                    except Exception:
-                        print("[!] Pixoo reconnect failed, will retry next frame")
+                # Phase 5-A: find the current agent dict for icon bar
+                cur_agent = None
+                if not is_sleeping and not is_main_flag and current_agents:
+                    # Match by display_idx position in agent list
+                    if display_idx < len(current_agents):
+                        cur_agent = current_agents[display_idx]
 
-            # Sleep until next event (frame or scroll), capped at 20ms
+                # Phase 5-C: dirty-frame detection — skip push if visual state unchanged
+                # Key: (anim_frame, scroll_x, display_char, color_tick, timer_min)
+                timer_min = int(elapsed) // 60 if elapsed is not None else -1
+                cur_char_name = display_list[display_idx]["char"] if (not is_sleeping and display_list) else "_sleep"
+                push_key = (anim_frame_idx, text_x, cur_char_name, color_tick, timer_min, is_sleeping)
+                if push_key == last_pushed_key:
+                    pass  # skip redundant push
+                else:
+                    composed = compose_frame(
+                        bg_frame=bg,
+                        scroll_font=scroll_font,
+                        ui_font=ui_font,
+                        scroll_text=current_ticker,
+                        scroll_x=text_x,
+                        agents=current_agents,
+                        main_active=current_main_active,
+                        elapsed_sec=elapsed,
+                        color_tick=color_tick,
+                        is_main=is_main_flag,
+                        scroll_text_h=scroll_text_h,
+                        current_agent=cur_agent,
+                    )
+                    try:
+                        pixoo.draw_image(composed)
+                        pixoo.push()
+                        last_pushed_key = push_key
+                    except Exception as e:
+                        print(f"[!] Pixoo send failed: {e}")
+                        last_pushed_key = None  # force retry next frame
+                        time.sleep(5)  # Back off before retry
+                        try:
+                            pixoo = Pixoo(PIXOO_IP)
+                            print("[i] Pixoo reconnect attempted")
+                        except Exception:
+                            print("[!] Pixoo reconnect failed, will retry next frame")
+
+            # Sleep until next event (frame or scroll)
+            # Phase 5-C: cap at 50ms (was 20ms) — reduces busy-loop overhead
             next_event = min(next_frame_t, next_scroll_t)
             wait = max(0.001, next_event - time.monotonic())
-            time.sleep(min(wait, 0.020))
+            time.sleep(min(wait, 0.050))
 
     except KeyboardInterrupt:
         print("\n[i] Stopped")

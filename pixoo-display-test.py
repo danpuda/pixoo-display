@@ -515,7 +515,16 @@ def run(duration_sec: float | None = None) -> None:
     _bbox = ImageDraw.Draw(_probe).textbbox((0, 0), "あgyj漢", font=scroll_font)
     scroll_text_h = _bbox[3] - _bbox[1]
 
-    pixoo = Pixoo(PIXOO_IP)
+    pixoo = None
+    for _attempt in range(3):
+        try:
+            pixoo = Pixoo(PIXOO_IP)
+            break
+        except Exception as e:
+            print(f"[!] Pixoo init failed (attempt {_attempt + 1}/3): {e}")
+            time.sleep(5)
+    if pixoo is None:
+        raise RuntimeError(f"Cannot connect to Pixoo at {PIXOO_IP} after 3 attempts")
     char_frame_cache: dict[str, List[Image.Image]] = {"opus": opus_frames}
 
     for name, paths in CHARACTER_FRAMES.items():
@@ -747,7 +756,7 @@ def run(duration_sec: float | None = None) -> None:
                     time.sleep(5)  # Back off before retry
                     try:
                         pixoo = Pixoo(PIXOO_IP)
-                        print("[i] Pixoo reconnected")
+                        print("[i] Pixoo reconnect attempted")
                     except Exception:
                         print("[!] Pixoo reconnect failed, will retry next frame")
 

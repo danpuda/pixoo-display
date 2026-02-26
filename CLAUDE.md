@@ -88,3 +88,25 @@ codex exec --full-auto -C /home/yama/pixoo-display \
 - [ ] Phase 3: tmux 出力がスクロールテキストに反映される
 - [ ] 全Phase: Codex レビューで🔴が0
 - [ ] git commit + push 完了
+
+### Phase 4: テスト & 安定化（設計書準拠）
+**スコープ**: 長時間稼働テスト + エッジケース + 🟡改善対応
+1. **determine_status フリッカー修正**（🟡68/100 → 80以上目標）
+   - `last_change_times` をエラー時に更新し続ける問題
+   - waiting→error→active→waitingのフリッカー残りを修正
+2. **Pixoo初期化時の例外保護**（🟡残留リスク）
+   - Pixoo()コンストラクタが例外投げずに戻るケースの対処
+   - reconnectログの偽陽性修正（"reconnected" → "reconnect attempted"）
+3. **エッジケーステスト**
+   - window追加/削除シミュレーション
+   - tmux再起動時の挙動
+   - capture-pane alt-screen対応確認
+4. **全テスト実行** `python3 -m pytest tests/ -v` が通ること
+5. **git commit + push**
+
+**完了条件:**
+- [ ] 全テスト通過
+- [ ] 🔴致命的: 0件
+- [ ] 🟡改善のフリッカー問題修正
+- [ ] reviews/ にCodexレビュー保存
+- [ ] git push完了

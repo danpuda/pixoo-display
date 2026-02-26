@@ -111,32 +111,36 @@ def determine_status(
     """Determine agent status by comparing capture-pane output with previous.
 
     Returns: "active", "waiting", or "error".
+
+    Diff tracking runs first (regardless of error state) so that
+    last_change_times reflects actual output changes, not mere re-detection
+    of a static error message.  This prevents the flicker cycle:
+    waiting → error → active → waiting.
     """
     if captured is None:
         # Alt-screen or capture failed → waiting
         return "waiting"
 
-    # Error detection (check before diff, as errors are always notable)
-    if ERROR_PATTERN_RE.search(captured):
-        # Don't update last_outputs on error — preserve error state
-        # until output actually changes (prevents error→active→waiting flicker)
+    # --- Diff tracking (always, before error check) ---
+    prev = last_outputs.get(window_name)
+    output_changed = prev is None or captured != prev
+    if output_changed:
+        last_outputs[window_name] = captured
         last_change_times[window_name] = now
+
+    # --- Error detection ---
+    if ERROR_PATTERN_RE.search(captured):
         return "error"
 
-    # Output diff
-    prev = last_outputs.get(window_name)
+    # --- First observation ---
     if prev is None:
-        # First observation — initialize tracking
-        last_outputs[window_name] = captured
-        last_change_times[window_name] = now
         return "active"
 
-    if captured != prev:
-        last_outputs[window_name] = captured
-        last_change_times[window_name] = now
+    # --- Output changed ---
+    if output_changed:
         return "active"
 
-    # Output unchanged — check staleness
+    # --- Output unchanged — check staleness ---
     last_change = last_change_times.get(window_name, now)
     if now - last_change > WAITING_THRESHOLD_SEC:
         return "waiting"

@@ -225,9 +225,31 @@ def pilmoji_outlined(pm, xy, text, font, fill):
 
 
 def get_latest_task_text(agents: list) -> str | None:
-    """Get the most recent subagent's task as scroll text."""
+    """Get scroll text from agents — prefer capture-pane scroll_text (Phase 3).
+
+    Priority: active agent with scroll_text > any agent with scroll_text > task name.
+    """
     if not agents:
         return None
+
+    # Prefer active agents with scroll_text
+    active_with_text = [
+        a for a in agents
+        if a.get("scroll_text") and a.get("status") == "active"
+    ]
+    if active_with_text:
+        latest = max(active_with_text, key=lambda a: a.get("last_seen", 0))
+        role = latest.get("role", "?")
+        return f"[{role}] {latest['scroll_text']}"
+
+    # Any agent with scroll_text
+    with_text = [a for a in agents if a.get("scroll_text")]
+    if with_text:
+        latest = max(with_text, key=lambda a: a.get("last_seen", 0))
+        role = latest.get("role", "?")
+        return f"[{role}] {latest['scroll_text']}"
+
+    # Fallback to task name
     sorted_agents = sorted(agents, key=lambda a: a.get("started", 0), reverse=True)
     latest = sorted_agents[0]
     task = latest.get("task", "")
@@ -432,7 +454,9 @@ def compose_frame(
         if ix + ICON_SIZE > max_icon_x:
             break
         color = ROLE_COLORS.get(role, (128, 128, 128))
-        if status != "active":
+        if status == "error":
+            color = (255, 0, 0)  # solid red for error
+        elif status != "active":
             color = (color[0] // 3, color[1] // 3, color[2] // 3)
         draw.rectangle(
             [ix, ICON_BAR_Y, ix + ICON_SIZE - 1, ICON_BAR_Y + ICON_SIZE - 1],

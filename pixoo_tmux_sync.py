@@ -5,11 +5,10 @@ Pixoo tmux Sync — tmux shared セッション → /tmp/pixoo-agents.json
 tmux の shared セッションを監視し、window 一覧を解析して
 Pixoo-64 ディスプレイ用の JSON ファイルに書き出す。
 
-既存の pixoo-display-test.py との互換性を維持するため、
-必須キー (id, char, task, started, last_seen, main_active) を出力する。
-追加キー (role, status) は display 側では無視される。
+互換キー: id, char, task, started, last_seen, main_active
+追加キー: role, status, scroll_text
 
-Phase 1: capture-pane は行わない（scroll_text なし）。
+Phase 3: capture-pane で出力取得 + ANSI除去 + diff判定 (active/waiting/error)
 
 Usage: python3 pixoo_tmux_sync.py  (runs as daemon)
 """
@@ -27,6 +26,19 @@ TMUX_SESSION = "shared"
 STATE_FILE = Path("/tmp/pixoo-agents.json")
 CONFIG_FILE = Path("/tmp/pixoo-tmux-config.json")
 POLL_SEC = 3.0
+WAITING_THRESHOLD_SEC = 30.0  # output unchanged for this long → "waiting"
+
+# ANSI escape sequence pattern (covers CSI, OSC, and other common sequences)
+ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\[[0-9;]*[a-zA-Z]"    # CSI sequences: \e[...m, \e[...H, etc.
+    r"|\x1b\][^\x07]*\x07"      # OSC sequences: \e]...\a
+    r"|\x1b\[[\d;]*[@-~]"       # remaining CSI
+    r"|\x1b[()][A-Z0-9]"        # character set selection
+)
+# Control characters except \n (0x0a) and \t (0x09) — keep those for structure
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f]")
+# Error detection in captured output
+ERROR_PATTERN_RE = re.compile(r"\b(error|Error|ERROR|FAILED|Traceback)\b")
 
 # Role → char mapping (for Pixoo display sprite selection)
 # Available sprites: opus, sonnet, haiku, gemini, kusomegane, codex, grok
@@ -41,6 +53,95 @@ ROLE_TO_CHAR: dict[str, str] = {
 
 # Window name pattern for idle slots (not displayed)
 IDLE_PATTERN = re.compile(r"^worker-\d+$")
+
+
+def sanitize_output(raw: str) -> str:
+    """Remove ANSI escape sequences and control characters from tmux output.
+
+    Preserves newlines for line-based processing.
+    """
+    text = ANSI_ESCAPE_RE.sub("", raw)
+    text = CONTROL_CHAR_RE.sub("", text)
+    return text
+
+
+def capture_pane(window_index: int) -> str | None:
+    """Capture tmux pane 0 output for a given window.
+
+    Returns sanitized text, or None on failure / alt-screen (empty).
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "capture-pane", "-t",
+             f"{TMUX_SESSION}:{window_index}", "-p"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        raw = result.stdout
+        if not raw.strip():
+            return None  # alt-screen (vim/less) or truly empty
+        return sanitize_output(raw)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def extract_scroll_text(captured: str | None) -> str:
+    """Extract the last meaningful line from captured output for scroll display."""
+    if not captured:
+        return ""
+    lines = [line for line in captured.split("\n") if line.strip()]
+    if not lines:
+        return ""
+    last_line = lines[-1].strip()
+    if len(last_line) > 80:
+        last_line = last_line[:77] + "..."
+    return last_line
+
+
+def determine_status(
+    captured: str | None,
+    window_name: str,
+    last_outputs: dict[str, str],
+    last_change_times: dict[str, float],
+    now: float,
+) -> str:
+    """Determine agent status by comparing capture-pane output with previous.
+
+    Returns: "active", "waiting", or "error".
+    """
+    if captured is None:
+        # Alt-screen or capture failed → waiting
+        return "waiting"
+
+    # Error detection (check before diff, as errors are always notable)
+    if ERROR_PATTERN_RE.search(captured):
+        # Still update diff tracking so error doesn't stick forever
+        last_outputs[window_name] = captured
+        last_change_times[window_name] = now
+        return "error"
+
+    # Output diff
+    prev = last_outputs.get(window_name)
+    if prev is None:
+        # First observation — initialize tracking
+        last_outputs[window_name] = captured
+        last_change_times[window_name] = now
+        return "active"
+
+    if captured != prev:
+        last_outputs[window_name] = captured
+        last_change_times[window_name] = now
+        return "active"
+
+    # Output unchanged — check staleness
+    last_change = last_change_times.get(window_name, now)
+    if now - last_change > WAITING_THRESHOLD_SEC:
+        return "waiting"
+
+    return "active"
 
 
 def load_config() -> dict:
@@ -217,9 +318,11 @@ def build_agents(
             "task": name,
             "started": first_seen[name],
             "last_seen": now,
-            # --- 追加キー (display側は無視) ---
+            # --- 追加キー ---
             "role": role,
-            "status": "active",
+            "status": "active",       # overwritten by enrich_with_capture
+            "scroll_text": "",         # overwritten by enrich_with_capture
+            "window_index": w["window_index"],
         })
 
     # Prune stale entries from first_seen
@@ -270,6 +373,9 @@ def main() -> None:
     print(f"[i] Output: {STATE_FILE}")
 
     first_seen: dict[str, float] = {}
+    # Phase 3: capture-pane diff tracking
+    last_outputs: dict[str, str] = {}
+    last_change_times: dict[str, float] = {}
     last_agent_ids: set[str] | None = None
     last_main_active: bool | None = None
 
@@ -287,6 +393,27 @@ def main() -> None:
             else:
                 agents, main_active = build_agents(windows, config, first_seen)
 
+                # Phase 3: enrich agents with capture-pane data
+                now = time.time()
+                for agent in agents:
+                    idx = agent.get("window_index")
+                    if idx is None:
+                        continue
+                    captured = capture_pane(idx)
+                    agent["scroll_text"] = extract_scroll_text(captured)
+                    # Use window_index as diff key (unique, avoids same-name collision)
+                    diff_key = str(idx)
+                    agent["status"] = determine_status(
+                        captured, diff_key,
+                        last_outputs, last_change_times, now,
+                    )
+
+                # Prune diff tracking for removed windows
+                current_idxs = {str(a["window_index"]) for a in agents if "window_index" in a}
+                for stale in [k for k in last_outputs if k not in current_idxs]:
+                    del last_outputs[stale]
+                    last_change_times.pop(stale, None)
+
             write_state(agents, main_active)
 
             # Log only on change
@@ -294,8 +421,8 @@ def main() -> None:
             if agent_ids != last_agent_ids or main_active != last_main_active:
                 dir_status = "active" if main_active else "idle"
                 if agents:
-                    roles = [f"{a['id']}({a['role']})" for a in agents]
-                    print(f"[i] Agents: {len(agents)} — {', '.join(roles)} (DIR: {dir_status})")
+                    statuses = [f"{a['id']}({a['status']})" for a in agents]
+                    print(f"[i] Agents: {len(agents)} — {', '.join(statuses)} (DIR: {dir_status})")
                 else:
                     print(f"[i] No agents (DIR: {dir_status})")
                 last_agent_ids = agent_ids

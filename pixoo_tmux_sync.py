@@ -118,8 +118,8 @@ def determine_status(
 
     # Error detection (check before diff, as errors are always notable)
     if ERROR_PATTERN_RE.search(captured):
-        # Still update diff tracking so error doesn't stick forever
-        last_outputs[window_name] = captured
+        # Don't update last_outputs on error — preserve error state
+        # until output actually changes (prevents error→active→waiting flicker)
         last_change_times[window_name] = now
         return "error"
 

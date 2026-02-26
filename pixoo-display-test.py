@@ -202,11 +202,9 @@ def read_agent_state() -> tuple[list, bool]:
         if len(live) < len(agents):
             expired = len(agents) - len(live)
             print(f"[i] TTL expired {expired} agent(s)")
-            data["agents"] = live
-            try:
-                STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-            except OSError:
-                pass
+            # Note: do NOT write back to STATE_FILE here.
+            # Only sync daemon should write (atomic via tempfile+os.replace).
+            # Display side is read-only to avoid race conditions.
         return live, main_active
     except (json.JSONDecodeError, OSError):
         return [], False
@@ -741,8 +739,17 @@ def run(duration_sec: float | None = None) -> None:
                     is_main=is_main_flag,
                     scroll_text_h=scroll_text_h,
                 )
-                pixoo.draw_image(composed)
-                pixoo.push()
+                try:
+                    pixoo.draw_image(composed)
+                    pixoo.push()
+                except Exception as e:
+                    print(f"[!] Pixoo send failed: {e}")
+                    time.sleep(5)  # Back off before retry
+                    try:
+                        pixoo = Pixoo(PIXOO_IP)
+                        print("[i] Pixoo reconnected")
+                    except Exception:
+                        print("[!] Pixoo reconnect failed, will retry next frame")
 
             # Sleep until next event (frame or scroll), capped at 20ms
             next_event = min(next_frame_t, next_scroll_t)

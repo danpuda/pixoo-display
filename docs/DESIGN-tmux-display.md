@@ -36,41 +36,48 @@ status: draft
 ```
 ┌─────────────────────────────────────────────┐
 │ tmux shared セッション                        │
-│ window 0: monitor                            │
-│ window 1: ebay-ph4-impl (Claude Code = PL-1) │
-│ window 2: codex-review (Codex = Reviewer)    │
-│ window 3: worker-3 (空き)                    │
-│ ...                                           │
+│ window 0: monitor (ロブ🦞 = DIR)             │
+│ window 1: ebay-ph4-lead (PL)                 │
+│ window 2: codex-review (QA)                  │
+│ window 3: ebay-ph4-impl (DEV)               │
+│ window 4: worker-4 (空き)                    │
 └──────────────┬──────────────────────────────┘
-               │ `tmux list-windows` (3秒ポーリング)
+               │ tmux list-windows -F (tab区切り, 3秒ポーリング)
                ▼
 ┌─────────────────────────────────────────────┐
 │ pixoo_tmux_sync.py (NEW — 監視デーモン)      │
-│ - tmux window 一覧取得                       │
+│ - tmux window 一覧取得（tab区切りでパース）  │
 │ - window名 → 役割マッピング                  │
-│ - pane の最終出力行を取得（電光掲示板用）    │
+│ - capture-pane で最終出力取得（ANSI除去）    │
 │ - /tmp/pixoo-agents.json に書き出し          │
 └──────────────┬──────────────────────────────┘
-               │ JSON 書き出し（既存と互換）
+               │ JSON 書き出し（既存必須キー互換）
                ▼
 ┌─────────────────────────────────────────────┐
 │ /tmp/pixoo-agents.json                       │
 │ { "agents": [                                │
-│     {"id": "ebay-ph4-impl",                  │
-│      "char": "claude-code",                  │
-│      "role": "PL-1",                         │
-│      "task": "eBay Phase 4 実装中",          │
-│      "status": "active",                     │
-│      "scroll_text": "最後の出力行..."}       │
+│     {"id": "ebay-ph4-lead",                  │
+│      "char": "codex",                        │
+│      "role": "PL",                           │
+│      "task": "eBay Phase 4 統括",            │
+│      "started": 1772077000,                  │
+│      "last_seen": 1772077060,                │
+│      "scroll_text": "✅ tests passed..."}    │
 │   ], "main_active": true }                   │
+│                                               │
+│ ★ 既存互換必須キー:                          │
+│   id, char, task, started, last_seen,        │
+│   main_active                                 │
+│ ★ 新規追加キー:                              │
+│   role, scroll_text, status                  │
 └──────────────┬──────────────────────────────┘
                │
                ▼
 ┌─────────────────────────────────────────────┐
-│ pixoo-display-test.py (既存 — 小改修)        │
-│ - role 表示追加（PL-1 / REV / PL-2）        │
-│ - scroll_text を電光掲示板に反映             │
-│ - キャラマッピング微調整                     │
+│ pixoo-display-test.py (既存 — Phase2で改修)  │
+│ - Phase1: 既存キーのみで動作（互換保証）     │
+│ - Phase2: role 表示追加                      │
+│ - Phase3: scroll_text を電光掲示板に反映     │
 └──────────────┬──────────────────────────────┘
                │ HTTP POST
                ▼
@@ -79,22 +86,57 @@ status: draft
 └─────────────────────────────────────────────┘
 ```
 
-## 3. window名 → 役割マッピング
+## 3. チーム構成（社長-PL-ワーカーモデル）
+
+> **PL（プロジェクトリーダー）は1人だけ。** 残りはワーカー。
+> Source: Claude Code 公式 Agent Teams + やまちゃん🗻指示（2026-02-26）
+
+### チームメイト一覧
+
+| 役割 | 略称 | 担当AI | 説明 |
+|------|------|--------|------|
+| 🦞 社長（Director） | `DIR` | Opus（ロブ🦞/OpenClaw） | 指示出し・判断・報告。コード書かない |
+| 🏗️ PL（Project Lead） | `PL` | Claude Code（tmux対話モード） | 1人だけ。設計→実装→テストを統括 |
+| ⚙️ コーディングワーカー | `DEV` | Claude Code / Codex | PLの指示でコード書く。複数OK |
+| 🔍 品質管理（QA） | `QA` | Codex | レビュー・テスト・バグ発見専任 |
+| 🔬 リサーチャー | `RES` | Sonnet（claude-p） | 調査・ドキュメント検索専任 |
+| 👁️ セキュリティ | `SEC` | Codex / Gemini | セキュリティレビュー専任 |
+
+### window名 → 役割マッピング
 
 | window名パターン | 役割 | キャラ | 表示略称 |
 |-----------------|------|--------|---------|
-| `*-impl` / `*-dev` | PL-1 (Claude Code) | claude-code | `PL1` |
-| `codex-*` | PL-2 / Reviewer (Codex) | codex | `PL2` or `REV` |
-| `*-review` / `*-fl3*` | Reviewer | reviewer | `REV` |
-| `monitor` | Monitor (ロブ🦞) | opus | `MON` |
-| `worker-N` (デフォルト名) | Idle slot | idle | `---` |
+| `monitor` | 社長（ロブ🦞） | opus | `DIR` |
+| `*-lead` | PL（1人のみ） | claude-code | `PL` |
+| `*-impl` / `*-dev` | コーディングワーカー | claude-code / codex | `DEV` |
+| `*-review` / `*-qa` / `*-fl3*` | 品質管理 | codex | `QA` |
+| `*-sec` | セキュリティ | codex | `SEC` |
+| `*-research` | リサーチャー | sonnet | `RES` |
+| `worker-N` (デフォルト名) | 空きスロット | idle | `---` |
+
+> **注**: `codex-` prefix は役割を決定しない。`codex-review` → QA、`codex-impl` → DEV。
+> suffix（末尾の役割キーワード）が役割を決める。
+
+**PL の選出ルール:**
+- window名に `-lead` を含むものが PL（**1つだけ**）
+- 複数 `-lead` がある場合: **設定ファイルで固定** or 最古の window index
+- PL の固定識別: `/tmp/pixoo-tmux-config.json` に `{"pl_window": "ebay-ph4-lead"}` を記載可能
+- 設定ファイルなし + `-lead` なし = PL不在（全員DEV扱い）
 
 **判定ロジック（優先順）:**
-1. window名に `review` or `fl3` → REV
-2. window名が `codex-` で始まる → PL2/REV
-3. window名に `impl` or `dev` → PL1
-4. window名が `monitor` → MON
-5. その他 → タスク名として表示
+1. `monitor` → DIR
+2. window名に `-lead` → PL（config固定 or 最古1つだけ）
+3. window名に `-review` or `-qa` or `-fl3` → QA
+4. window名に `-sec` → SEC
+5. window名に `-impl` or `-dev` → DEV
+6. window名に `-research` → RES
+7. `worker-N` パターン → 空き（非表示）
+8. その他 → DEV（window名をタスク名として表示）
+
+**tmux list-windows のフォーマット（tab区切り = `:` 衝突回避）:**
+```bash
+tmux list-windows -t shared -F "#{window_index}\t#{window_name}\t#{pane_pid}"
+```
 
 ## 4. リアルタイム状態の取得
 
@@ -107,70 +149,115 @@ tmux capture-pane -t shared:{window_index} -p | tail -3
 # - 最終出力が変化してるか（前回との diff）
 ```
 
-**状態判定:**
+**状態判定（出力diff方式 — pid依存を避ける）:**
 | 状態 | 条件 | 表示 |
 |------|------|------|
-| 🟢 active | 出力が変化中 | キャラアニメーション |
-| 🟡 waiting | pid生存 + 出力変化なし(>30秒) | キャラ静止 |
-| ⚫ idle | window名が `worker-N` のまま | 非表示 or グレー |
-| 🔴 error | pid死亡 or エラー出力検知 | 目がバッテン |
+| 🟢 active | capture-pane の出力が前回と異なる | キャラアニメーション |
+| 🟡 waiting | 出力変化なし > 30秒 | キャラ静止（暗めドット） |
+| ⚫ idle | window名が `worker-N` のまま | 非表示 |
+| 🔴 error | 出力に `error` / `Error` / `FAILED` を検知 | 赤点滅ドット |
+
+> **注**: `pane_pid` はシェルPIDであり、実作業プロセスの生死を反映しない。
+> 出力 diff で判定する方が信頼性が高い。
+
+**capture-pane の注意事項:**
+- `tmux capture-pane -t shared:{idx} -p -e` → ANSIエスケープ付き raw 出力
+- **ANSI除去**: `sed 's/\x1b\[[0-9;]*m//g'` でサニタイズ必須
+- **alt-screen**: vim/less 使用中は capture-pane が空返答 → `waiting` 扱い
+- **制御文字**: `\x00-\x1f` を除去してからスクロールテキストに使う
+- **多ペイン**: window に複数 pane がある場合は pane 0 のみ対象
 
 ## 5. 画面レイアウト（64x64px）
 
 ```
-┌──────────────────────────────────────────┐
-│ [PL1🦞] [PL2🤓] [REV🤓]  ⏱ 01:23:45   │  ← 上部: 役割+キャラアイコン+タイマー
-│                                          │
-│    ┌──────────────────────────┐           │
-│    │   メインキャラ表示        │           │  ← 中央: アクティブなPLのアニメーション
-│    │   (アニメーション)        │           │
-│    └──────────────────────────┘           │
-│                                          │
-│ ▶ ebay-ph4: API連携テスト中... ◀         │  ← 下部: 電光掲示板スクロール
-└──────────────────────────────────────────┘
+64px幅 × 64px高の制約内レイアウト:
+
+┌────────────────────────────────────────────────────────────────┐
+│ 0                                                           63 │
+│ ┌──┐┌──┐┌──┐┌──┐┌──┐           ┌──────────┐  ← row 0-7 (8px) │
+│ │PL││D1││D2││QA││  │           │  01:23   │  上部: 5x5アイコン│
+│ └──┘└──┘└──┘└──┘└──┘           └──────────┘  + タイマー       │
+│ ┌──────────────────────────────────────────┐  ← row 8-51(44px)│
+│ │                                          │  中央: キャラ      │
+│ │        アクティブワーカーの                │  アニメーション    │
+│ │        キャラアニメーション(32x32 centered) │                   │
+│ │                                          │                   │
+│ └──────────────────────────────────────────┘                   │
+│ ▶ ebay-ph4: テスト中...                     ← row 52-63(12px) │
+│                                              電光掲示板スクロール│
+└────────────────────────────────────────────────────────────────┘
 ```
 
-**上部アイコンバー（新規追加）:**
-- 各ワーカーを 8x8px アイコンで横並び表示
-- 役割ラベル（3文字）を下に
-- アクティブなワーカーは色付き、idle はグレー
+**上部アイコンバー（row 0-7, 8px高）:**
+- 各メンバーを **5x5px ドット** で横並び（間隔2px → 最大8枠 = 56px）
+- タイマーは右端に 5x7 フォントで表示（残り約24px）
+- active = 色付きドット / waiting = 暗めドット / idle = 非表示
+- ラベルは表示しない（5px では文字が潰れる。色と位置で識別）
+
+**色コード（ドット色で役割識別）:**
+| 役割 | 色 | RGB |
+|------|-----|-----|
+| DIR | 🟣 紫 | (180, 0, 255) |
+| PL | 🔵 青 | (0, 120, 255) |
+| DEV | 🟢 緑 | (0, 200, 80) |
+| QA | 🟡 黄 | (255, 200, 0) |
+| SEC | 🔴 赤 | (255, 60, 60) |
+| RES | 🟠 橙 | (255, 140, 0) |
+
+**DEV が複数いる場合の表示:**
+- 上部バー: DEV ドットを複数並べる（全員表示、最大8枠まで）
+- 中央アニメ: **最も active な DEV**（出力変化が最新）のキャラを表示
+- 電光掲示板: active な DEV の出力をローテーション（5秒切替え）
+- 8枠超えた場合: 古い idle から非表示にする（active 優先）
 
 ## 6. 実装計画（フェーズ分割）
 
 ### Phase 1: pixoo_tmux_sync.py 作成（sync デーモン差替え）
-- tmux list-windows パース
-- window名 → 役割マッピング
-- /tmp/pixoo-agents.json 書き出し（既存形式互換）
-- **既存の pixoo-display-test.py はそのまま動く**（最低限の互換）
+**スコープ**: tmux → JSON 変換のみ。display 側は触らない。
+- tmux list-windows パース（tab区切り）
+- window名 → 役割マッピング（判定ロジック実装）
+- /tmp/pixoo-agents.json 書き出し
+- **Phase1 の互換必須キー**: `id`, `char`, `task`, `started`, `last_seen`, `main_active`
+- **Phase1 で追加するキー**: `role`, `status`（display側は無視するだけ）
+- **Phase1 では capture-pane しない**（scroll_text は空文字）
+- pixoo-sync-wrapper.sh を修正（pixoo_agent_sync.py → pixoo_tmux_sync.py に切替え）
+- **成功条件**: 既存 pixoo-display-test.py がそのまま動いてキャラ表示される
 
-### Phase 2: pixoo-display-test.py に role 表示追加
-- 上部アイコンバーの追加
-- 役割ラベル表示（PL1/PL2/REV/MON）
-- アクティブ/待機の色分け
+### Phase 2: pixoo-display-test.py に上部アイコンバー追加
+**スコープ**: display 側の改修。sync 側は触らない。
+- 上部 8px に 5x5 ドットアイコン + タイマー
+- 色コードで役割識別（PL=青、DEV=緑、QA=黄...）
+- active/waiting の色分け
+- 既存のキャラアニメーション・スクロールは維持
 
-### Phase 3: リアルタイム電光掲示板
-- tmux capture-pane で最終出力取得
-- スクロールテキストに反映
-- 出力変化の検知 → active/waiting 判定
+### Phase 3: リアルタイム電光掲示板（sync + display 連携）
+**スコープ**: capture-pane 追加 + display のスクロール改修。
+- pixoo_tmux_sync.py に capture-pane 取得を追加
+- ANSI除去 + 制御文字サニタイズ
+- scroll_text キーに書き出し
+- pixoo-display-test.py のスクロールを scroll_text から取得に変更
+- 出力 diff で active/waiting 判定
 
 ### Phase 4: テスト & 安定化
-- 長時間稼働テスト
-- エッジケース（window追加/削除、tmux再起動）
-- パフォーマンス確認
+- 長時間稼働テスト（24h）
+- エッジケース: window追加/削除、tmux再起動、Pixoo電源断
+- capture-pane の alt-screen / 多ペイン対応
+- パフォーマンス確認（CPU/メモリ）
 
 ## 7. 実装方針
 
 - **pixoo_agent_sync.py は残す**（claude-p の結果表示に将来使う可能性）
 - **pixoo_tmux_sync.py を新規作成**（主系統を切替え）
 - **pixoo-display-test.py は最小改修**（role 表示追加のみ）
-- **wrapper.sh で起動デーモンを切替え**
+- **pixoo-sync-wrapper.sh** で起動デーモンを切替え（`pixoo_agent_sync.py` → `pixoo_tmux_sync.py`）
+- **pixoo-display-wrapper.sh** は変更なし（Phase 2 まで）
 
 ## 8. 担当
 
 | 作業 | 担当 | 理由 |
 |------|------|------|
 | 設計書（本文書） | 🦞 ロブ（Opus） | 社長仕事 |
-| Phase 1-3 実装 | tmux PL (Claude Code) | Pythonコード生成 |
+| Phase 1-3 実装 | tmux DEV (Claude Code) | Pythonコード生成 |
 | Phase 4 テスト | 🦞 ロブ + Codex レビュー | セルフチェック禁止 |
 | Pixoo 実機テスト | 🦞 ロブ（exec経由） | Pixoo接続はWSLから |
 

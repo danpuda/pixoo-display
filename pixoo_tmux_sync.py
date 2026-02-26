@@ -44,11 +44,11 @@ ERROR_PATTERN_RE = re.compile(r"\b(error|Error|ERROR|FAILED|Traceback)\b")
 # Available sprites: opus, sonnet, haiku, gemini, kusomegane, codex, grok
 ROLE_TO_CHAR: dict[str, str] = {
     "DIR": "opus",
-    "PL": "codex",
+    "PL": "sonnet",
     "DEV": "codex",
-    "QA": "codex",
-    "SEC": "codex",
-    "RES": "sonnet",
+    "QA": "kusomegane",
+    "SEC": "haiku",
+    "RES": "gemini",
 }
 
 # Window name pattern for idle slots (not displayed)

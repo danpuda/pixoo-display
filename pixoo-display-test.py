@@ -796,11 +796,11 @@ def run(duration_sec: float | None = None) -> None:
 
             # Worker name scroll: recompute width + reset offset when displayed agent changes
             _wn_agent = current_agents[display_idx] if (current_agents and display_idx < len(current_agents)) else None
-            _wn_key = (display_idx, _wn_agent.get("id", "") if _wn_agent else "")
+            _wn_text = strip_emoji(_wn_agent.get("task", _wn_agent.get("id", "")) if _wn_agent else "")
+            _wn_key = (display_idx, _wn_agent.get("id", "") if _wn_agent else "", _wn_text)
             if _wn_key != prev_worker_key:
                 prev_worker_key = _wn_key
                 worker_scroll_offset = 0
-                _wn_text = strip_emoji(_wn_agent.get("task", _wn_agent.get("id", "")) if _wn_agent else "")
                 current_wn_w = text_bbox_size(row1_font_for_scroll, _wn_text)[0] if _wn_text else 0
 
             while now >= next_frame_t:

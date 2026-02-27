@@ -164,15 +164,16 @@ def strip_emoji(text: str) -> str:
 def advance_worker_scroll(offset: int, wn_w: int, max_w: int) -> int:
     """Return next worker name scroll offset (1px/tick).
 
-    Scrolls until the end of the text is visible (offset == wn_w - max_w),
-    holds for WORKER_SCROLL_PAUSE_TICKS, then resets to 0.
+    Cycle: head-pause (-PAUSE..0) → scroll (0..stop_point) → tail-pause → repeat.
+    Negative offsets represent the head-pause phase; compose_frame clamps with
+    max(0, offset) so the text stays at the leftmost position during that phase.
     Returns 0 unchanged when wn_w <= max_w (no scroll needed).
     """
     if wn_w <= max_w:
         return 0
     stop_point = wn_w - max_w
     if offset + 1 > stop_point + WORKER_SCROLL_PAUSE_TICKS:
-        return 0
+        return -WORKER_SCROLL_PAUSE_TICKS
     return offset + 1
 
 
@@ -525,7 +526,7 @@ def compose_frame(
             wn_w, _ = text_bbox_size(row1_font, worker_name)
             wn_color = ROLE_COLORS.get(role, (200, 200, 200))
             # Clamp draw offset so text never overscrolls past showing the end
-            effective_offset = min(worker_scroll_offset, max(0, wn_w - max_w))
+            effective_offset = min(max(0, worker_scroll_offset), max(0, wn_w - max_w))
             draw_outlined_text(odraw, (ix - effective_offset, row1_y), worker_name, row1_font, fill=wn_color)
 
         # Row 2: Role label

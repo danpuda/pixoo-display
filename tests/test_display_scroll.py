@@ -94,14 +94,19 @@ class TestAdvanceWorkerScrollLongName:
         # One tick before the wrap threshold → still incrementing
         assert advance_worker_scroll(pause_end - 1, 100, MAX_W) == pause_end
 
-    def test_wraps_to_zero_after_pause(self):
-        # Exactly at pause_end → next call should wrap to 0
+    def test_wraps_to_negative_pause_after_tail_pause(self):
+        # Exactly at pause_end → next call should wrap to -WORKER_SCROLL_PAUSE_TICKS
         stop = 100 - MAX_W
         pause_end = stop + WORKER_SCROLL_PAUSE_TICKS
-        assert advance_worker_scroll(pause_end, 100, MAX_W) == 0
+        assert advance_worker_scroll(pause_end, 100, MAX_W) == -WORKER_SCROLL_PAUSE_TICKS
+
+    def test_head_pause_counts_up_to_zero(self):
+        # During head-pause phase (negative offset), offset advances toward 0
+        assert advance_worker_scroll(-WORKER_SCROLL_PAUSE_TICKS, 100, MAX_W) == -WORKER_SCROLL_PAUSE_TICKS + 1
+        assert advance_worker_scroll(-1, 100, MAX_W) == 0
 
     def test_full_cycle(self):
-        """Simulate a full scroll cycle: 0 → stop_point → pause → 0."""
+        """Simulate a full scroll cycle: 0 → stop_point → tail-pause → head-pause → 0."""
         wn_w = 80
         stop = wn_w - MAX_W  # 18
         offset = 0
@@ -109,10 +114,17 @@ class TestAdvanceWorkerScrollLongName:
         for _ in range(stop):
             offset = advance_worker_scroll(offset, wn_w, MAX_W)
         assert offset == stop
-        # Pause phase: offset continues to stop + PAUSE_TICKS
+        # Tail-pause phase: offset continues to stop + PAUSE_TICKS
         for _ in range(WORKER_SCROLL_PAUSE_TICKS):
             offset = advance_worker_scroll(offset, wn_w, MAX_W)
         assert offset == stop + WORKER_SCROLL_PAUSE_TICKS
-        # Next call wraps back to 0
+        # Wraps to head-pause start
         offset = advance_worker_scroll(offset, wn_w, MAX_W)
+        assert offset == -WORKER_SCROLL_PAUSE_TICKS
+        # Head-pause phase: offset counts up to 0
+        for _ in range(WORKER_SCROLL_PAUSE_TICKS):
+            offset = advance_worker_scroll(offset, wn_w, MAX_W)
         assert offset == 0
+        # Scroll starts again
+        offset = advance_worker_scroll(offset, wn_w, MAX_W)
+        assert offset == 1

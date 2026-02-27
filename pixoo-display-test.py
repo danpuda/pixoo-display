@@ -58,6 +58,14 @@ _ensure_pixoo_import_works_without_tk()
 from pixoo import Pixoo  # noqa: E402
 from pilmoji import Pilmoji  # noqa: E402
 
+# Phase 6: notify mode integration (fallback to always-False if import fails)
+try:
+    sys.path.insert(0, "/home/yama/pixoo-follow-notify")
+    from src.pixoo_mode import is_notify_mode  # noqa: E402
+except Exception:
+    def is_notify_mode() -> bool:  # type: ignore[misc]
+        return False
+
 # --- Config ---
 PIXOO_IP = "192.168.86.42"
 DISPLAY_SIZE = 64
@@ -660,6 +668,11 @@ def run(duration_sec: float | None = None) -> None:
 
     try:
         while True:
+            # Phase 6: notify mode — skip display updates
+            if is_notify_mode():
+                time.sleep(1)
+                continue
+
             now = time.monotonic()
             wall_now = time.time()
 

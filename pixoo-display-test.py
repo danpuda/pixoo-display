@@ -18,9 +18,16 @@ import types
 from pathlib import Path
 from typing import List, Tuple
 
+import logging
 import re
 
 from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger(__name__)
+
+import os as _os
+if _os.environ.get("PIXOO_DEBUG") == "1":
+    logging.basicConfig(level=logging.DEBUG, format="[%(name)s] %(levelname)s: %(message)s")
 
 
 def _ensure_pixoo_import_works_without_tk() -> None:
@@ -62,9 +69,11 @@ from pilmoji import Pilmoji  # noqa: E402
 try:
     sys.path.insert(0, "/home/yama/pixoo-follow-notify")
     from src.pixoo_mode import is_notify_mode  # noqa: E402
+    print("[i] Phase 6: notify mode import OK")
 except Exception:
     def is_notify_mode() -> bool:  # type: ignore[misc]
         return False
+    print("[!] Phase 6: notify mode import FAILED, fallback to always-False")
 
 # --- Config ---
 PIXOO_IP = "192.168.86.42"
@@ -670,8 +679,10 @@ def run(duration_sec: float | None = None) -> None:
         while True:
             # Phase 6: notify mode — skip display updates
             if is_notify_mode():
+                logger.debug("[notify] mode active — skipping frame")
                 time.sleep(1)
                 continue
+            logger.debug("[notify] mode inactive, proceeding")
 
             now = time.monotonic()
             wall_now = time.time()
@@ -882,8 +893,10 @@ def run(duration_sec: float | None = None) -> None:
                         worker_scroll_offset=worker_scroll_offset,
                     )
                     try:
+                        logger.debug("[push] frame=%s agent=%s", anim_frame_idx, cur_char_name)
                         pixoo.draw_image(composed)
                         pixoo.push()
+                        logger.debug("[push] OK")
                         last_pushed_key = push_key
                     except Exception as e:
                         print(f"[!] Pixoo send failed: {e}")

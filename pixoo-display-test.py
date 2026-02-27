@@ -286,7 +286,7 @@ def get_latest_task_text(agents: list) -> str | None:
     if active_with_text:
         latest = max(active_with_text, key=lambda a: a.get("last_seen", 0))
         role = latest.get("role", "?")
-        text = latest["scroll_text"][:MAX_TICKER_LEN]
+        text = strip_emoji(latest["scroll_text"][:MAX_TICKER_LEN])
         return f"[{role}] {text}"
 
     # Any agent with scroll_text
@@ -294,13 +294,13 @@ def get_latest_task_text(agents: list) -> str | None:
     if with_text:
         latest = max(with_text, key=lambda a: a.get("last_seen", 0))
         role = latest.get("role", "?")
-        text = latest["scroll_text"][:MAX_TICKER_LEN]
+        text = strip_emoji(latest["scroll_text"][:MAX_TICKER_LEN])
         return f"[{role}] {text}"
 
     # Fallback to task name
     sorted_agents = sorted(agents, key=lambda a: a.get("started", 0), reverse=True)
     latest = sorted_agents[0]
-    task = str(latest.get("task", ""))[:MAX_TICKER_LEN]
+    task = strip_emoji(str(latest.get("task", ""))[:MAX_TICKER_LEN])
     char = latest.get("char", "?")
     if task:
         return f"[{char}] {task}"
@@ -321,7 +321,7 @@ def get_top_priority_task() -> str:
                 continue
             if in_priority and line.startswith("### "):
                 # Extract task name, strip markdown
-                task = line.lstrip("#").strip()
+                task = strip_emoji(line.lstrip("#").strip())
                 return f"TOP: {task}"
             if in_priority and line.startswith("## ") and not line.startswith("## 🔥"):
                 break  # next section
@@ -359,7 +359,7 @@ def get_latest_git_commits() -> str:
                 continue
             ts = int(parts[0])
             commit_hash = parts[1]
-            message = parts[2]
+            message = strip_emoji(parts[2])
             repo_name = repo.name
             if best is None or ts > best[0]:
                 best = (ts, repo_name, commit_hash, message)

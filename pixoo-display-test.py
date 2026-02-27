@@ -63,6 +63,7 @@ PIXOO_IP = "192.168.86.42"
 DISPLAY_SIZE = 64
 FRAME_INTERVAL_MS = 250
 SCROLL_SPEED_MS = 150  # ~6.7 FPS scroll (Phase 5-C: reduced from 100ms to save CPU)
+WORKER_SCROLL_PAUSE_TICKS = 10  # frames to pause at end of worker name before resetting
 TEXT_STEP_PX = 1
 CHARACTER_SWAP_SEC = 5.0
 STATE_FILE = Path("/tmp/pixoo-agents.json")
@@ -158,6 +159,21 @@ _EMOJI_RE = re.compile(
 def strip_emoji(text: str) -> str:
     """Remove emoji characters so PIL bitmap fonts can render the text."""
     return _EMOJI_RE.sub("", text).strip()
+
+
+def advance_worker_scroll(offset: int, wn_w: int, max_w: int) -> int:
+    """Return next worker name scroll offset (1px/tick).
+
+    Scrolls until the end of the text is visible (offset == wn_w - max_w),
+    holds for WORKER_SCROLL_PAUSE_TICKS, then resets to 0.
+    Returns 0 unchanged when wn_w <= max_w (no scroll needed).
+    """
+    if wn_w <= max_w:
+        return 0
+    stop_point = wn_w - max_w
+    if offset + 1 > stop_point + WORKER_SCROLL_PAUSE_TICKS:
+        return 0
+    return offset + 1
 
 
 def load_font(size: int = 8) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -451,6 +467,7 @@ def compose_frame(
     is_main: bool,
     scroll_text_h: int,
     current_agent: dict | None = None,
+    worker_scroll_offset: int = 0,
 ) -> Image.Image:
     """Compose a single display frame with icon bar, character, and scroll text.
 
@@ -501,18 +518,15 @@ def compose_frame(
         status = current_agent.get("status", "active")
         label = ROLE_LABELS.get(role, role)
 
-        # Row 1: Worker name (task name from agent) — Issue #2: strip emoji, bigger font
+        # Row 1: Worker name — scroll horizontally when too wide to fit
         worker_name = strip_emoji(current_agent.get("task", current_agent.get("id", "")))
         if worker_name:
             max_w = DISPLAY_SIZE - 2
             wn_w, _ = text_bbox_size(row1_font, worker_name)
-            if wn_w > max_w:
-                while len(worker_name) > 3 and wn_w > max_w:
-                    worker_name = worker_name[:-1]
-                    wn_w, _ = text_bbox_size(row1_font, worker_name + "..")
-                worker_name = worker_name + ".."
-            wn_color = ROLE_COLORS.get(role, (200, 200, 200))  # Issue #2: brighter fallback
-            draw_outlined_text(odraw, (ix, row1_y), worker_name, row1_font, fill=wn_color)
+            wn_color = ROLE_COLORS.get(role, (200, 200, 200))
+            # Clamp draw offset so text never overscrolls past showing the end
+            effective_offset = min(worker_scroll_offset, max(0, wn_w - max_w))
+            draw_outlined_text(odraw, (ix - effective_offset, row1_y), worker_name, row1_font, fill=wn_color)
 
         # Row 2: Role label
         color = ROLE_COLORS.get(role, (128, 128, 128))
@@ -577,6 +591,7 @@ def run(duration_sec: float | None = None) -> None:
 
     scroll_font = load_font(size=SCROLL_FONT_SIZE)
     ui_font = load_font(size=UI_FONT_SIZE)
+    row1_font_for_scroll = load_font(size=ICON_BAR_ROW1_FONT_SIZE)
     # Use descender-heavy chars for accurate height measurement
     _probe = Image.new("RGB", (1, 1))
     _bbox = ImageDraw.Draw(_probe).textbbox((0, 0), "あgyj漢", font=scroll_font)
@@ -625,6 +640,10 @@ def run(duration_sec: float | None = None) -> None:
     is_sleeping = False
     last_active_time = time.monotonic()
     last_pushed_key: tuple | None = None  # Phase 5-C: skip redundant pushes
+
+    worker_scroll_offset = 0   # current scroll offset for worker name (px)
+    current_wn_w = 0           # cached pixel width of current worker name
+    prev_worker_key: tuple | None = None  # (display_idx, agent_id) — detect agent changes
 
     start = time.monotonic()
     next_frame_t = start
@@ -775,6 +794,15 @@ def run(duration_sec: float | None = None) -> None:
 
             updated = False
 
+            # Worker name scroll: recompute width + reset offset when displayed agent changes
+            _wn_agent = current_agents[display_idx] if (current_agents and display_idx < len(current_agents)) else None
+            _wn_key = (display_idx, _wn_agent.get("id", "") if _wn_agent else "")
+            if _wn_key != prev_worker_key:
+                prev_worker_key = _wn_key
+                worker_scroll_offset = 0
+                _wn_text = strip_emoji(_wn_agent.get("task", _wn_agent.get("id", "")) if _wn_agent else "")
+                current_wn_w = text_bbox_size(row1_font_for_scroll, _wn_text)[0] if _wn_text else 0
+
             while now >= next_frame_t:
                 if is_sleeping:
                     anim_frame_idx = (anim_frame_idx + 1) % len(sleep_frames)
@@ -790,6 +818,7 @@ def run(duration_sec: float | None = None) -> None:
                 text_x -= TEXT_STEP_PX
                 if text_x + current_ticker_w < 0:
                     text_x = DISPLAY_SIZE
+                worker_scroll_offset = advance_worker_scroll(worker_scroll_offset, current_wn_w, DISPLAY_SIZE - 2)
                 next_scroll_t += SCROLL_SPEED_MS / 1000.0
                 updated = True
 
@@ -816,10 +845,10 @@ def run(duration_sec: float | None = None) -> None:
                         cur_agent = current_agents[display_idx]
 
                 # Phase 5-C: dirty-frame detection — skip push if visual state unchanged
-                # Key: (anim_frame, scroll_x, display_char, color_tick, timer_min)
+                # Key: (anim_frame, scroll_x, display_char, color_tick, timer_min, worker_offset)
                 timer_min = int(elapsed) // 60 if elapsed is not None else -1
                 cur_char_name = display_list[display_idx]["char"] if (not is_sleeping and display_list) else "_sleep"
-                push_key = (anim_frame_idx, text_x, cur_char_name, color_tick, timer_min, is_sleeping)
+                push_key = (anim_frame_idx, text_x, cur_char_name, color_tick, timer_min, is_sleeping, worker_scroll_offset)
                 if push_key == last_pushed_key:
                     pass  # skip redundant push
                 else:
@@ -836,6 +865,7 @@ def run(duration_sec: float | None = None) -> None:
                         is_main=is_main_flag,
                         scroll_text_h=scroll_text_h,
                         current_agent=cur_agent,
+                        worker_scroll_offset=worker_scroll_offset,
                     )
                     try:
                         pixoo.draw_image(composed)

@@ -18,6 +18,8 @@ import types
 from pathlib import Path
 from typing import List, Tuple
 
+import re
+
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -125,8 +127,8 @@ ROLE_COLORS: dict[str, Tuple[int, int, int]] = {
     "RES": (255, 140, 0),    # orange
 }
 ROLE_DISPLAY_ORDER = {"DIR": 0, "PL": 1, "QA": 2, "SEC": 3, "DEV": 4, "RES": 5}
-ICON_BAR_H = 18  # Phase 5.2: 2-row layout (row1: worker name 8px, row2: role label 9px)
-ICON_BAR_ROW1_FONT_SIZE = 8   # worker name (Phase 5.2: was 6, now 8 for readability)
+ICON_BAR_H = 21  # Issue #2: 2-row layout (row1: worker name 11px, row2: role label 9px)
+ICON_BAR_ROW1_FONT_SIZE = 11  # worker name (Issue #2: was 8, now 11 for readability)
 ICON_BAR_ROW2_FONT_SIZE = 9   # role label (large, readable on 64px LED)
 ICON_LABEL_GAP = 1
 
@@ -146,6 +148,16 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ]
+
+
+_EMOJI_RE = re.compile(
+    r"[\U0001F300-\U0001F9FF\U0001FA00-\U0001FEFF\u2600-\u26FF\u2700-\u27BF]+"
+)
+
+
+def strip_emoji(text: str) -> str:
+    """Remove emoji characters so PIL bitmap fonts can render the text."""
+    return _EMOJI_RE.sub("", text).strip()
 
 
 def load_font(size: int = 8) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -482,15 +494,15 @@ def compose_frame(
 
     ix = 1
     row1_y = 0   # worker name row
-    row2_y = 9   # role label row
+    row2_y = 12  # role label row (Issue #2: shifted down from 9 to match 11px row1 font)
 
     if current_agent is not None:
         role = current_agent.get("role", "DEV")
         status = current_agent.get("status", "active")
         label = ROLE_LABELS.get(role, role)
 
-        # Row 1: Worker name (task name from agent)
-        worker_name = current_agent.get("task", current_agent.get("id", ""))
+        # Row 1: Worker name (task name from agent) — Issue #2: strip emoji, bigger font
+        worker_name = strip_emoji(current_agent.get("task", current_agent.get("id", "")))
         if worker_name:
             max_w = DISPLAY_SIZE - 2
             wn_w, _ = text_bbox_size(row1_font, worker_name)
@@ -499,7 +511,7 @@ def compose_frame(
                     worker_name = worker_name[:-1]
                     wn_w, _ = text_bbox_size(row1_font, worker_name + "..")
                 worker_name = worker_name + ".."
-            wn_color = ROLE_COLORS.get(role, (128, 128, 128))
+            wn_color = ROLE_COLORS.get(role, (200, 200, 200))  # Issue #2: brighter fallback
             draw_outlined_text(odraw, (ix, row1_y), worker_name, row1_font, fill=wn_color)
 
         # Row 2: Role label

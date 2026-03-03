@@ -93,14 +93,14 @@ UI_FONT_SIZE = 8
 
 FALLBACK_TICKER = "ロブ稼働中！サブエージェント待機中..."
 SLEEP_TICKER = "ロブ就寝中...zzZ"
-TODO_FILE = Path("/mnt/c/Users/danpu/OneDrive/Desktop/obsidianVault/openclaw/memory/tasks/todo-priority.md")
+TODO_FILE = Path("/home/yama/ws/memory/tasks/todo-priority.md")
 TODO_POLL_SEC = 60  # re-read todo file every 60s
 
 # Git repos to scan for latest commits (ticker display)
 GIT_REPOS = [
-    Path("/mnt/c/Users/danpu/OneDrive/Desktop/obsidianVault/openclaw"),
-    Path("/mnt/c/Users/danpu/OneDrive/Desktop/fx-backtest-system"),
-    Path("/mnt/c/Users/danpu/OneDrive/Desktop/pixoo-display"),
+    Path("/home/yama/ws"),
+    Path("/home/yama/fx-backtest-v2"),
+    Path("/home/yama/pixoo-display"),
     Path("/home/yama/lobster-desktop-widget"),
     Path("/home/yama/pico-pedal-bridge"),
     Path("/home/yama/smart-home-dashboard"),
